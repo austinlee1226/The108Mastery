@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>麻將生存：雀神音擊修正版</title>
+    <style>
+        * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+        body { 
+            margin: 0; 
+            background: #051a10; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh;
+            height: -webkit-fill-available;
+            overflow: hidden; 
+            position: fixed; 
+            width: 100%; 
+            font-family: sans-serif;
+        }
+        #canvasContainer {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas { 
+            background: radial-gradient(circle, #1a5e3a 0%, #0b2e1d 100%);
+            display: block; 
+            touch-action: none; 
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body>
+<div id="canvasContainer">
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const GW = 720, GH = 1280;
+
+let gameStatus = 'SHUFFLE', level = 1, totalScore = 0, movesLeft = 10, timeLeft = 60;
+let hand = [], pool = [], deck = [];
+let selectedHandIndex = -1, frameCount = 0, lastTimestamp = 0;
+let winInfo = { name: "", curScore: 0, scale: 0, reward: 0 };
+let lastTickTime = 0, gameTimeElapsed = 0;
+
+const TILES_DATA = {
+    'MAN': ['🀇','🀈','🀉','🀊','🀋','🀌','🀍','🀎','🀏'],
+    'TONG': ['🀙','🀚','🀛','🀜','🀝','🀞','🀟','🀠','🀡'],
+    'TIAO': ['🀐','🀑','🀒','🀓','🀔','🀕','🀖','🀗','🀘']
+};
+
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function playTone(freq, dur, vol = 0.1) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    g.gain.setValueAtTime(vol, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + dur);
+}
+
+function init() {
+    resize();
+    window.addEventListener('resize', resize);
+    canvas.addEventListener('pointerdown', (e) => {
+        if (!audioCtx) audioCtx = new AudioContext();
+        handleInput(e);
+    });
+    resetGame(true);
+    lastTimestamp = Date.now();
+    requestAnimationFrame(loop);
+}
+
+function resize() {
+    const scale = Math.min(window.innerWidth / GW, window.innerHeight / GH);
+    canvas.width = GW * scale;
+    canvas.height = GH * scale;
+    ctx.scale(scale, scale);
+}
+
+function createDeck() {
+    let d = [];
+    for (let type in TILES_DATA) {
+        for (let i = 1; i <= 9; i++) {
+            for (let n = 0; n < 4; n++) d.push({ type, val: i, txt: TILES_DATA[type][i-1] });
+        }
+    }
+    return d.sort(() => Math.random() - 0.5);
+}
+
+function generateLevel() {
+    deck = createDeck();
+    let tempHand = [];
+    let rand = Math.random();
+
+    // 移除國士無雙，僅保留七對子與標準牌型
+    if (rand < 0.35) { // 七對子
+        for(let i=0; i<7; i++) { 
+            let target = deck.splice(0, 2); 
+            tempHand.push({...target[0]}, {...target[1]}); 
+        }
+    } else { // 標準牌型
+        for(let i=0; i<4; i++) tempHand.push(deck.pop(), deck.pop(), deck.pop());
+        tempHand.push(deck.pop(), deck.pop());
+    }
+
+    let swapCount = Math.min(13, 3 + Math.floor(level / 2));
+    let correctTiles = [];
+    for(let i=0; i<swapCount; i++) {
+        correctTiles.push(tempHand.splice(Math.floor(Math.random()*tempHand.length), 1)[0]);
+        tempHand.push(deck.pop());
+    }
+    hand = tempHand; sortHand();
+    pool = [...correctTiles];
+    while(pool.length < 20) pool.push(deck.pop());
+    pool.sort(() => Math.random()-0.5);
+    pool.forEach((t, i) => {
+        t.x = GW/2; t.y = GH/2;
+        t.targetX = 100 + (i % 5) * 130; t.targetY = 280 + Math.floor(i / 5) * 145;
+    });
+}
+
+function checkWinType(h) {
+    const counts = {};
+    h.forEach(t => { let k = t.type + t.val; counts[k] = (counts[k] || 0) + 1; });
+    // 國士無雙判定已移除
+    if (Object.values(counts).filter(v => v === 2).length === 7) return { name: "七對子", tai: 4 };
+    if (canWinStandard(h)) {
+        if (new Set(h.map(t => t.type)).size === 1) return { name: "清一色", tai: 8 };
+        if (Object.values(counts).filter(v => v >= 3).length === 4) return { name: "碰碰胡", tai: 4 };
+        return { name: "平胡", tai: 1 };
+    }
+    return null;
+}
+
+function canWinStandard(h) {
+    const groups = { 'MAN': [], 'TONG': [], 'TIAO': [] };
+    h.forEach(t => groups[t.type].push(t.val));
+    for (let k in groups) groups[k].sort((a,b) => a-b);
+    for (let type in groups) {
+        let nums = groups[type];
+        for (let i = 0; i < nums.length - 1; i++) {
+            if (nums[i] === nums[i+1]) {
+                const temp = JSON.parse(JSON.stringify(groups));
+                temp[type].splice(i, 2);
+                if (Object.values(temp).every(g => checkMianzi(g))) return true;
+            }
+        }
+    }
+    return false;
+}
+
+function checkMianzi(n) {
+    if (n.length === 0) return true;
+    if (n[0] === n[1] && n[0] === n[2]) if (checkMianzi(n.slice(3))) return true;
+    let s = n.indexOf(n[0]+1), t = n.indexOf(n[0]+2);
+    if (s !== -1 && t !== -1) {
+        const next = [...n]; next.splice(t,1); next.splice(s,1); next.splice(0,1);
+        if (checkMianzi(next)) return true;
+    }
+    return false;
+}
+
+function resetGame(isFullReset) {
+    if(isFullReset) { level = 1; totalScore = 0; movesLeft = 10; timeLeft = 60; gameTimeElapsed = 0; }
+    gameStatus = 'SHUFFLE'; frameCount = 0; selectedHandIndex = -1;
+    winInfo.scale = 0; lastTickTime = 0; generateLevel();
+}
+
+function handleInput(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.width / GW;
+    const mx = (e.clientX - rect.left) / scale;
+    const my = (e.clientY - rect.top) / scale;
+    
+    if (gameStatus === 'FAIL') { resetGame(true); return; }
+    if (gameStatus !== 'PLAYING') return;
+
+    if (my > 950) { 
+        hand.forEach((t, i) => {
+            const x = 85 + (i % 7) * 92, y = 1080 + Math.floor(i / 7) * 145;
+            if (Math.abs(mx - x) < 45 && Math.abs(my - y) < 65) { 
+                selectedHandIndex = i; 
+                playTone(660, 0.05, 0.05);
+            }
+        });
+    } else if (selectedHandIndex !== -1 && movesLeft > 0) {
+        for (let i = 0; i < pool.length; i++) {
+            const p = pool[i];
+            if (Math.abs(mx - p.x) < 60 && Math.abs(my - p.y) < 80) {
+                movesLeft--;
+                playTone(440, 0.05, 0.05);
+                hand[selectedHandIndex] = { ...p };
+                selectedHandIndex = -1; sortHand();
+                
+                let win = checkWinType(hand);
+                if (win) {
+                    let currentWinScore = (win.tai * 1000) + (movesLeft * 100) + (Math.floor(timeLeft) * 100);
+                    totalScore += currentWinScore;
+                    let reward = 2 + win.tai;
+                    movesLeft += reward; 
+                    timeLeft += 20; // 修正：每局秒數增加 20 秒
+                    winInfo = { name: win.name, curScore: currentWinScore, reward: reward, scale: 0.1 };
+                    gameStatus = 'WIN_ANIM';
+                    playTone(880, 0.3, 0.2); setTimeout(() => playTone(1320, 0.5, 0.2), 150);
+                    setTimeout(() => { level++; resetGame(false); }, 2000);
+                } else if (movesLeft <= 0) { gameStatus = 'FAIL'; playTone(110, 0.6, 0.3); }
+                else if (deck.length > 0) {
+                    let nextTile = deck.pop();
+                    nextTile.x = p.x; nextTile.y = -100;
+                    nextTile.targetX = p.targetX; nextTile.targetY = p.targetY;
+                    pool[i] = nextTile;
+                } else { pool.splice(i, 1); }
+                break;
+            }
+        }
+    }
+}
+
+function sortHand() { hand.sort((a,b) => (a.type !== b.type) ? a.type.localeCompare(b.type) : a.val - b.val); }
+
+function update() {
+    const now = Date.now(), dt = (now - lastTimestamp) / 1000;
+    lastTimestamp = now;
+    if (gameStatus === 'SHUFFLE') {
+        frameCount++; pool.forEach(p => { p.x += (Math.random()-0.5)*15; p.y += (Math.random()-0.5)*15; });
+        if (frameCount > 60) gameStatus = 'PLAYING';
+    } else if (gameStatus === 'PLAYING') {
+        timeLeft -= dt; gameTimeElapsed += dt;
+        if (timeLeft <= 0) { timeLeft = 0; gameStatus = 'FAIL'; playTone(110, 0.6, 0.3); }
+        if (timeLeft > 10) {
+            if (gameTimeElapsed > 10 && gameTimeElapsed - lastTickTime >= 1.0) {
+                playTone(440, 0.05, 0.03); 
+                lastTickTime = gameTimeElapsed;
+            }
+        } else if (timeLeft > 0) {
+            if (gameTimeElapsed - lastTickTime >= 0.5) {
+                playTone(880, 0.08, 0.06); 
+                lastTickTime = gameTimeElapsed;
+            }
+        }
+        pool.forEach(p => { p.x += (p.targetX - p.x) * 0.2; p.y += (p.targetY - p.y) * 0.2; });
+    } else if (gameStatus === 'WIN_ANIM') { if (winInfo.scale < 1) winInfo.scale += 0.08; }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, GW, GH);
+    
+    // Top Bar
+    ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(0, 0, GW, 220);
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center";
+    ctx.font = "bold 36px Arial"; ctx.fillText(`LEVEL ${level}`, 360, 55);
+    
+    ctx.font = "bold 52px Arial";
+    ctx.fillStyle = movesLeft <= 3 ? "#ff4444" : "#00ffcc"; ctx.fillText(`MOVE: ${movesLeft}`, 180, 120);
+    ctx.fillStyle = timeLeft <= 10 ? "#ff4444" : "#ffcc00"; ctx.fillText(`TIME: ${Math.ceil(timeLeft)}s`, 540, 120);
+    
+    ctx.font = "bold 48px Arial"; ctx.fillStyle = "#fff"; 
+    ctx.fillText(`${totalScore.toLocaleString()}`, 360, 195);
+
+    // Deck Info
+    ctx.font = "bold 24px Arial"; ctx.fillStyle = "rgba(255,255,255,0.4)"; 
+    ctx.fillText(`DECK: ${deck.length}`, 360, 255);
+    
+    // Pool
+    pool.forEach(p => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, false));
+
+    // Hand Area
+    ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 950, GW, 330);
+    hand.forEach((t, i) => {
+        const isSel = (i === selectedHandIndex);
+        const x = 85 + (i % 7) * 92, y = (1080 + Math.floor(i / 7) * 145) - (isSel ? 45 : 0);
+        drawTile(x, y, t.txt, getCol(t.type), 85, 125, isSel);
+    });
+
+    if (gameStatus === 'WIN_ANIM') {
+        ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0,0,GW,GH);
+        ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
+        ctx.fillStyle = "#ffcc00"; ctx.font = "bold 110px Arial"; ctx.shadowBlur = 35; ctx.shadowColor = "#fff";
+        ctx.fillText(winInfo.name, 0, -50);
+        ctx.fillStyle = "#fff"; ctx.font = "bold 50px Arial"; ctx.shadowBlur = 0;
+        ctx.fillText(`SCORE: +${winInfo.curScore.toLocaleString()}`, 0, 50);
+        ctx.fillStyle = "#00ff00"; ctx.font = "bold 45px Arial";
+        ctx.fillText(`+${winInfo.reward} MOVES / +20s`, 0, 130);
+        ctx.restore();
+    }
+    if (gameStatus === 'FAIL') {
+        ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
+        ctx.fillStyle = "#ff4444"; ctx.font = "bold 110px Arial"; ctx.fillText("GAME OVER", 360, 500);
+        ctx.fillStyle = "#ffcc00"; ctx.font = "bold 65px Arial"; ctx.fillText(`${totalScore.toLocaleString()}`, 360, 620);
+        ctx.fillStyle = "#fff"; ctx.font = "40px Arial"; ctx.fillText("TAP TO RESTART", 360, 780);
+    }
+}
+
+function getCol(t) { return t==='MAN' ? '#d32f2f' : t==='TONG' ? '#1976d2' : '#2e7d32'; }
+function drawTile(x, y, txt, color, w, h, isSel) {
+    ctx.save(); 
+    if (isSel) { ctx.shadowBlur = 25; ctx.shadowColor = "#ffcc00"; }
+    ctx.fillStyle = "#fff"; 
+    ctx.beginPath();
+    ctx.roundRect(x-w/2, y-h/2, w, h, 10);
+    ctx.fill();
+    ctx.strokeStyle = isSel ? "#ffcc00" : "#bbb"; ctx.lineWidth = isSel?8:2; ctx.stroke();
+    ctx.fillStyle = color; ctx.font = `bold ${w*0.8}px Arial`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(txt || '?', x, y); ctx.restore();
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+init();
+</script>
+</body>
+</html>
