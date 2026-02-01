@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>拾八雀：聽牌雷達版</title>
+    <title>拾八雀：生存競技終極版</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -29,9 +29,7 @@ let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
 let winInfo = { names: [], totalTai: 0, curScore: 0, scale: 0, penalty: 0, rewardMoves: 0 };
 let drawGamePending = false, winPending = false; 
 
-// 聽牌相關
 let isRichi = false, richiAutoTimer = 0, glowValue = 0;
-let canRichiRadar = false; // 系統雷達：是否已經入聽
 let richiHint = ""; 
 
 const WIND_ORDER = ['🀀', '🀁', '🀂', '🀃'];
@@ -83,7 +81,7 @@ function resetAndStart(isFullReset) {
     timeLeft = 60; swapActionCount = 0; flowersWon = [];
     selectedHandIndex = -1; selectedPoolIndex = -1; richiHint = "";
     drawGamePending = false; winPending = false;
-    isRichi = false; richiAutoTimer = 0; canRichiRadar = false;
+    isRichi = false; richiAutoTimer = 0;
     startOpeningSequence();
 }
 
@@ -120,7 +118,6 @@ async function startOpeningSequence() {
     }
     sortHand(); await delay(500); fillFullPool();
     gameStatus = 'PLAYING';
-    checkRadar();
 }
 
 function fillFullPool() {
@@ -136,6 +133,54 @@ function fillFullPool() {
     }
     playTone(523, 0.1); 
     if (deck.length === 0) checkFinalPossibility();
+}
+
+function isKeyTile(newTile) {
+    for (let hTile of hand) {
+        if (hTile.type === newTile.type && hTile.txt === newTile.txt) return true;
+        if (hTile.type === newTile.type && hTile.val !== null && newTile.val !== null) {
+            if (Math.abs(hTile.val - newTile.val) <= 2) return true;
+        }
+    }
+    return false;
+}
+
+async function checkFinalPossibility() {
+    if (gameStatus !== 'PLAYING' || drawGamePending || deck.length > 0) return;
+    let canWin = false;
+    for(let pTile of pool) {
+        for(let i=0; i<hand.length; i++) {
+            let temp = JSON.parse(JSON.stringify(hand));
+            temp[i] = pTile;
+            if(calculateTotalTai(temp, flowersWon, true)) { canWin = true; break; }
+        }
+        if(canWin) break;
+    }
+    if (!canWin) {
+        drawGamePending = true;
+        await delay(1000);
+        triggerDrawGame();
+    }
+}
+
+// --- 核心更新：流局懲罰檢查遊戲結束 ---
+function triggerDrawGame() {
+    const isPenalized = (swapActionCount < 3);
+    if (isPenalized) {
+        movesLeft = Math.max(0, movesLeft - 5);
+        winInfo = { names: ["流局懲罰 -5步", "手牌更換不足3次"], totalTai: 0, scale: 0, rewardMoves: 0 };
+        playTone(150, 0.8);
+        
+        // 修正點：如果懲罰後步數歸零，判定遊戲結束
+        if (movesLeft <= 0) {
+            gameStatus = 'FAIL';
+            return;
+        }
+    } else {
+        winInfo = { names: ["流局", "牌庫已空"], totalTai: 0, scale: 0, rewardMoves: 0 };
+        playTone(220, 0.6);
+    }
+    gameStatus = 'WIN_ANIM';
 }
 
 async function performSwap(hIdx, pIdx) {
@@ -155,12 +200,10 @@ async function performSwap(hIdx, pIdx) {
         playTone(987, 0.3);
         await delay(1500); 
         triggerWin(results);
-    } else {
-        if (movesLeft <= 0) gameStatus = 'FAIL';
-        else {
-            checkRadar();
-            if (deck.length === 0) checkFinalPossibility();
-        }
+    } else if (movesLeft <= 0) {
+        gameStatus = 'FAIL';
+    } else if (deck.length === 0) {
+        checkFinalPossibility();
     }
 }
 
@@ -170,17 +213,6 @@ function triggerWin(results) {
     movesLeft += sumTai; 
     winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, curScore: totalScore, scale: 0, rewardMoves: sumTai };
     gameStatus = 'WIN_ANIM'; playTone(880, 0.2);
-}
-
-// 系統自動掃描雷達：判斷是否入聽
-function checkRadar() {
-    canRichiRadar = false;
-    for (let i = 0; i < hand.length; i++) {
-        if (checkSpecificRichi(i)) {
-            canRichiRadar = true;
-            return;
-        }
-    }
 }
 
 function checkSpecificRichi(hIdx) {
@@ -284,24 +316,20 @@ function draw() {
         ctx.beginPath(); ctx.roundRect(50, 880, 240, 80, 15); ctx.fill();
         ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; ctx.fillText("更換牌池", 170, 930);
         
-        // 聽牌按鈕：入聽後才亮紅色 (d32f2f)
+        let canRichiRadar = false;
+        for(let i=0; i<hand.length; i++) if(checkSpecificRichi(i)) { canRichiRadar = true; break; }
+        
         ctx.fillStyle = isRichi ? "#555" : (canRichiRadar ? "#d32f2f" : "#333");
         ctx.beginPath(); ctx.roundRect(310, 880, 360, 80, 15); ctx.fill();
-        ctx.fillStyle = (canRichiRadar && !isRichi) ? "#fff" : "#888"; 
-        ctx.fillText(isRichi ? "聽牌中..." : "聽牌立直 (+2台)", 490, 930);
+        ctx.fillStyle = "#fff"; ctx.fillText(isRichi ? "聽牌中..." : "聽牌立直 (+2台)", 490, 930);
         
-        if(richiHint) {
-            ctx.fillStyle = "#f44"; ctx.font = "bold 28px Arial"; ctx.fillText(richiHint, 360, 860);
-        }
+        ctx.font = "24px Arial"; ctx.fillStyle = "#fff";
+        ctx.fillText(`已換牌: ${swapActionCount}/3`, 170, 860);
     }
     
     ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 950, GW, 330);
     hand.forEach((t, i) => {
-        // 修正：亮起廢牌提示 (當聽牌按鈕亮起且打掉這張能聽牌時)
-        let isWaste = false;
-        if(canRichiRadar && !isRichi && !winPending) {
-            if(checkSpecificRichi(i)) isWaste = true;
-        }
+        let isWaste = !isRichi && !winPending && checkSpecificRichi(i);
         drawTile(t.x, t.y - (i===selectedHandIndex?45:0), t.txt, getCol(t.type), 85, 125, i===selectedHandIndex, null, isWaste);
     });
 
@@ -313,30 +341,16 @@ function draw() {
     if (gameStatus === 'WIN_ANIM') {
         ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
         ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
-        ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.fillText(winInfo.totalTai > 0 ? `${winInfo.totalTai} 台!` : "流局", 0, -180);
-        ctx.fillStyle = "#0f0"; ctx.font = "bold 50px Arial"; if (winInfo.rewardMoves > 0) ctx.fillText(`+${winInfo.rewardMoves} 步獎勵`, 0, -100);
-        ctx.fillStyle = "#fff"; ctx.font = "30px Arial"; winInfo.names.forEach((n, i) => { if(winInfo.totalTai > 0) ctx.fillText(n, 0, -20 + i * 40); });
+        ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.fillText(winInfo.totalTai > 0 ? `${winInfo.totalTai} 台!` : winInfo.names[0], 0, -180);
+        if(winInfo.names.length > 1) {
+            ctx.fillStyle = "#fff"; ctx.font = "30px Arial";
+            winInfo.names.slice(1).forEach((n, i) => ctx.fillText(n, 0, -20 + i * 40));
+        }
         ctx.fillStyle = "#aaa"; ctx.fillText("點擊進入下一局", 0, 320); ctx.restore();
         if(winInfo.scale < 1) winInfo.scale += 0.05;
     }
-    if (gameStatus === 'START_SCREEN') drawOverlay("拾八雀：聽牌雷達版", "開始挑戰", "#fc0");
+    if (gameStatus === 'START_SCREEN') drawOverlay("拾八雀：生存競技", "開始挑戰", "#fc0");
     if (gameStatus === 'FAIL') drawOverlay("生命耗盡", "重新開始", "#f44");
-}
-
-async function handleRichi() {
-    if (selectedHandIndex === -1) {
-        richiHint = "請先選擇要棄哪張牌";
-        setTimeout(() => richiHint = "", 2000);
-        return;
-    }
-    if (checkSpecificRichi(selectedHandIndex)) {
-        isRichi = true;
-        playTone(1200, 0.5);
-        selectedHandIndex = -1; 
-    } else {
-        richiHint = "打掉此牌無法聽牌";
-        setTimeout(() => richiHint = "", 2000);
-    }
 }
 
 function handleInput(e) {
@@ -346,17 +360,18 @@ function handleInput(e) {
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const mx = (clientX - rect.left) / scale;
     const my = (clientY - rect.top) / scale;
-
     if (gameStatus === 'START_SCREEN' || gameStatus === 'FAIL') { resetAndStart(true); return; }
     if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) { resetAndStart(false); return; }
     if (gameStatus !== 'PLAYING' || winPending) return;
 
     if (my > 880 && my < 960) {
         if (mx > 50 && mx < 290 && deck.length > 0 && !isRichi) { fillFullPool(); return; }
-        if (mx > 310 && mx < 670 && !isRichi) { handleRichi(); return; }
+        if (mx > 310 && mx < 670 && !isRichi) {
+            if (selectedHandIndex !== -1 && checkSpecificRichi(selectedHandIndex)) { isRichi = true; playTone(1200, 0.5); selectedHandIndex = -1; }
+            return;
+        }
     }
     if (isRichi) return; 
-
     if (my > 950) {
         hand.forEach((t, i) => {
             const x = 85 + (i % 7) * 92, y = 1080 + Math.floor(i / 7) * 145;
@@ -383,24 +398,19 @@ function update() {
     if (gameStatus === 'PLAYING' && !winPending) {
         timeLeft -= isRichi ? dt * 2 : dt; 
         if (timeLeft <= 0) gameStatus = 'FAIL';
-
         if (isRichi) {
             richiAutoTimer += dt;
             if (richiAutoTimer > 0.8) { 
                 richiAutoTimer = 0;
                 if (deck.length > 0) {
-                    let foundWin = false;
+                    fillFullPool();
                     for(let pIdx=0; pIdx<pool.length; pIdx++){
                         for(let hIdx=0; hIdx<hand.length; hIdx++){
-                            let testHand = JSON.parse(JSON.stringify(hand));
-                            testHand[hIdx] = pool[pIdx];
-                            if(calculateTotalTai(testHand, flowersWon, true)){
-                                foundWin = true; performSwap(hIdx, pIdx); return;
-                            }
+                            let th = JSON.parse(JSON.stringify(hand)); th[hIdx] = pool[pIdx];
+                            if(calculateTotalTai(th, flowersWon, true)) return performSwap(hIdx, pIdx);
                         }
                     }
-                    if(!foundWin) fillFullPool();
-                } else { checkFinalPossibility(); }
+                } else checkFinalPossibility();
             }
         }
     }
@@ -424,9 +434,9 @@ function createDeck() {
 function drawTile(x, y, txt, color, w, h, isSel, fs, isGlow = false) {
     ctx.save(); ctx.translate(x, y);
     if (isGlow) {
-        ctx.shadowBlur = 20 * glowValue; ctx.shadowColor = "#f00";
-        ctx.strokeStyle = `rgba(255, 0, 0, ${glowValue})`; ctx.lineWidth = 10;
-        ctx.strokeRect(-w/2-5, -h/2-5, w+10, h+10);
+        ctx.shadowBlur = 15 * glowValue; ctx.shadowColor = "#f00";
+        ctx.strokeStyle = `rgba(255, 0, 0, ${glowValue})`; ctx.lineWidth = 8;
+        ctx.strokeRect(-w/2, -h/2, w, h);
     }
     ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
     ctx.strokeStyle = isSel ? "#fc0" : "#bbb"; ctx.lineWidth = isSel?5:2; ctx.stroke();
