@@ -26,7 +26,7 @@ let totalScore = 0, movesLeft = 10, timeLeft = 60;
 let hand = [], pool = [], deck = [], flowersWon = [];
 let swapActionCount = 0, gameCount = 0; 
 let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
-let winInfo = { names: [], totalTai: 0, curScore: 0, scale: 0, penalty: 0, rewardMoves: 0 };
+let winInfo = { names: [], totalTai: 0, curScore: 0, scale: 0, penalty: 0, rewardMoves: 0, winScore: 0 };
 let drawGamePending = false, winPending = false; 
 
 let isRichi = false, richiAutoTimer = 0, glowValue = 0;
@@ -163,21 +163,18 @@ async function checkFinalPossibility() {
     }
 }
 
-// --- 核心更新：流局懲罰檢查遊戲結束 ---
 function triggerDrawGame() {
     const isPenalized = (swapActionCount < 3);
     if (isPenalized) {
         movesLeft = Math.max(0, movesLeft - 5);
-        winInfo = { names: ["流局懲罰 -5步", "手牌更換不足3次"], totalTai: 0, scale: 0, rewardMoves: 0 };
+        winInfo = { names: ["流局懲罰", "手牌更換不足3次"], totalTai: 0, scale: 0, rewardMoves: -5, winScore: 0 };
         playTone(150, 0.8);
-        
-        // 修正點：如果懲罰後步數歸零，判定遊戲結束
         if (movesLeft <= 0) {
             gameStatus = 'FAIL';
             return;
         }
     } else {
-        winInfo = { names: ["流局", "牌庫已空"], totalTai: 0, scale: 0, rewardMoves: 0 };
+        winInfo = { names: ["流局", "牌庫已空"], totalTai: 0, scale: 0, rewardMoves: 0, winScore: 0 };
         playTone(220, 0.6);
     }
     gameStatus = 'WIN_ANIM';
@@ -185,33 +182,54 @@ function triggerDrawGame() {
 
 async function performSwap(hIdx, pIdx) {
     if (gameStatus !== 'PLAYING' || winPending) return;
-    movesLeft--; swapActionCount++;
-    playTone(440, 0.05);
+    
     const poolTile = { ...pool[pIdx] };
-    hand[hIdx] = poolTile;
-    pool.splice(pIdx, 1);
-    selectedHandIndex = -1; selectedPoolIndex = -1;
-    sortHand();
-    await delay(300); 
-
-    let results = calculateTotalTai(hand, flowersWon);
+    
+    let tempHand = [...hand];
+    tempHand[hIdx] = poolTile;
+    let results = calculateTotalTai(tempHand, flowersWon);
+    
     if (results) {
+        hand[hIdx] = poolTile;
+        pool.splice(pIdx, 1);
+        selectedHandIndex = -1; selectedPoolIndex = -1;
+        sortHand();
+        await delay(300);
         winPending = true;
         playTone(987, 0.3);
         await delay(1500); 
         triggerWin(results);
-    } else if (movesLeft <= 0) {
-        gameStatus = 'FAIL';
-    } else if (deck.length === 0) {
-        checkFinalPossibility();
+    } else {
+        movesLeft--; 
+        swapActionCount++;
+        playTone(440, 0.05);
+        hand[hIdx] = poolTile;
+        pool.splice(pIdx, 1);
+        selectedHandIndex = -1; selectedPoolIndex = -1;
+        sortHand();
+        await delay(300); 
+
+        if (movesLeft <= 0) {
+            gameStatus = 'FAIL';
+        } else if (deck.length === 0) {
+            checkFinalPossibility();
+        }
     }
 }
 
 function triggerWin(results) {
     let sumTai = results.reduce((a, b) => a + b.tai, 0);
-    totalScore += (sumTai * 1000);
+    let winScore = sumTai * 1000;
+    totalScore += winScore;
     movesLeft += sumTai; 
-    winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, curScore: totalScore, scale: 0, rewardMoves: sumTai };
+    winInfo = { 
+        names: results.map(r => `${r.name} ${r.tai}台`), 
+        totalTai: sumTai, 
+        curScore: totalScore, 
+        winScore: winScore,
+        scale: 0, 
+        rewardMoves: sumTai 
+    };
     gameStatus = 'WIN_ANIM'; playTone(880, 0.2);
 }
 
@@ -340,13 +358,42 @@ function draw() {
     
     if (gameStatus === 'WIN_ANIM') {
         ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
-        ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
-        ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.fillText(winInfo.totalTai > 0 ? `${winInfo.totalTai} 台!` : winInfo.names[0], 0, -180);
-        if(winInfo.names.length > 1) {
-            ctx.fillStyle = "#fff"; ctx.font = "30px Arial";
-            winInfo.names.slice(1).forEach((n, i) => ctx.fillText(n, 0, -20 + i * 40));
+        ctx.save(); ctx.translate(GW/2, GH/2); ctx.scale(winInfo.scale, winInfo.scale);
+        
+        // 標題
+        ctx.fillStyle = "#fc0"; ctx.font = "bold 90px Arial"; ctx.textAlign = "center";
+        ctx.fillText(winInfo.totalTai > 0 ? `${winInfo.totalTai} 台!` : winInfo.names[0], 0, -220);
+        
+        if(winInfo.totalTai > 0) {
+            // 獎勵明細
+            ctx.fillStyle = "#0f0"; ctx.font = "bold 50px Arial";
+            ctx.fillText(`步數回補：+${winInfo.rewardMoves}`, 0, -140);
+            ctx.fillStyle = "#fff"; ctx.font = "bold 40px Arial";
+            ctx.fillText(`獲得分數：+${winInfo.winScore.toLocaleString()}`, 0, -80);
+
+            // 番種明細 (兩行並列排版)
+            ctx.font = "30px Arial";
+            const mid = Math.ceil(winInfo.names.length / 2);
+            winInfo.names.forEach((name, i) => {
+                const isLeft = i < mid;
+                const xPos = isLeft ? -180 : 180;
+                const yPos = 20 + (isLeft ? i : i - mid) * 50;
+                ctx.fillStyle = "rgba(255,255,255,0.9)";
+                ctx.textAlign = isLeft ? "right" : "left";
+                ctx.fillText(name, xPos, yPos);
+            });
+        } else if(winInfo.names.length > 1) {
+             // 流局懲罰顯示
+             ctx.fillStyle = "#f44"; ctx.font = "bold 45px Arial";
+             ctx.fillText(winInfo.names[1], 0, -140);
+             ctx.fillStyle = "#fff"; ctx.font = "30px Arial";
+             ctx.fillText(`步數扣除：${winInfo.rewardMoves}`, 0, -80);
         }
-        ctx.fillStyle = "#aaa"; ctx.fillText("點擊進入下一局", 0, 320); ctx.restore();
+
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#aaa"; ctx.font = "24px Arial";
+        ctx.fillText("點擊進入下一局", 0, 320); 
+        ctx.restore();
         if(winInfo.scale < 1) winInfo.scale += 0.05;
     }
     if (gameStatus === 'START_SCREEN') drawOverlay("拾八雀：生存競技", "開始挑戰", "#fc0");
