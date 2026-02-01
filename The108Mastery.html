@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>拾八雀：算番競技 (底台強化版)</title>
+    <title>拾八雀：聽牌雷達版</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -27,7 +27,12 @@ let hand = [], pool = [], deck = [], flowersWon = [];
 let swapActionCount = 0, gameCount = 0; 
 let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
 let winInfo = { names: [], totalTai: 0, curScore: 0, scale: 0, penalty: 0, rewardMoves: 0 };
-let drawGamePending = false; 
+let drawGamePending = false, winPending = false; 
+
+// 聽牌相關
+let isRichi = false, richiAutoTimer = 0, glowValue = 0;
+let canRichiRadar = false; // 系統雷達：是否已經入聽
+let richiHint = ""; 
 
 const WIND_ORDER = ['🀀', '🀁', '🀂', '🀃'];
 const FLOWER_NAMES = ['春', '夏', '秋', '冬', '梅', '蘭', '竹', '菊'];
@@ -76,7 +81,9 @@ function resetAndStart(isFullReset) {
     seatWind = WIND_ORDER[gameCount % 4];
     roundWind = WIND_ORDER[Math.floor((gameCount / 4) % 4)];
     timeLeft = 60; swapActionCount = 0; flowersWon = [];
-    selectedHandIndex = -1; selectedPoolIndex = -1; drawGamePending = false;
+    selectedHandIndex = -1; selectedPoolIndex = -1; richiHint = "";
+    drawGamePending = false; winPending = false;
+    isRichi = false; richiAutoTimer = 0; canRichiRadar = false;
     startOpeningSequence();
 }
 
@@ -113,6 +120,7 @@ async function startOpeningSequence() {
     }
     sortHand(); await delay(500); fillFullPool();
     gameStatus = 'PLAYING';
+    checkRadar();
 }
 
 function fillFullPool() {
@@ -130,27 +138,8 @@ function fillFullPool() {
     if (deck.length === 0) checkFinalPossibility();
 }
 
-async function checkFinalPossibility() {
-    if (gameStatus !== 'PLAYING' || drawGamePending || deck.length > 0) return;
-    const res = calculateTotalTai(hand, flowersWon);
-    if (!res) {
-        drawGamePending = true;
-        await delay(1000); 
-        triggerDrawGame();
-    }
-}
-
-function triggerDrawGame() {
-    const isEvil = (swapActionCount < 3);
-    const penalty = isEvil ? 5 : 0;
-    movesLeft = Math.max(0, movesLeft - penalty);
-    gameStatus = 'WIN_ANIM';
-    winInfo = { names: isEvil ? ["洗牌懲罰 -5步", "無牌判定"] : ["流局"], totalTai: 0, penalty: penalty, scale: 0, rewardMoves: 0 };
-    playTone(isEvil ? 150 : 220, 0.6);
-}
-
 async function performSwap(hIdx, pIdx) {
-    if (gameStatus !== 'PLAYING') return;
+    if (gameStatus !== 'PLAYING' || winPending) return;
     movesLeft--; swapActionCount++;
     playTone(440, 0.05);
     const poolTile = { ...pool[pIdx] };
@@ -162,24 +151,60 @@ async function performSwap(hIdx, pIdx) {
 
     let results = calculateTotalTai(hand, flowersWon);
     if (results) {
-        let sumTai = results.reduce((a, b) => a + b.tai, 0);
-        totalScore += (sumTai * 1000);
-        movesLeft += sumTai; 
-        winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, curScore: totalScore, scale: 0, rewardMoves: sumTai };
-        gameStatus = 'WIN_ANIM'; playTone(880, 0.2);
+        winPending = true;
+        playTone(987, 0.3);
+        await delay(1500); 
+        triggerWin(results);
     } else {
         if (movesLeft <= 0) gameStatus = 'FAIL';
-        else if (deck.length === 0) checkFinalPossibility();
+        else {
+            checkRadar();
+            if (deck.length === 0) checkFinalPossibility();
+        }
     }
 }
 
-function calculateTotalTai(h, flowers) {
+function triggerWin(results) {
+    let sumTai = results.reduce((a, b) => a + b.tai, 0);
+    totalScore += (sumTai * 1000);
+    movesLeft += sumTai; 
+    winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, curScore: totalScore, scale: 0, rewardMoves: sumTai };
+    gameStatus = 'WIN_ANIM'; playTone(880, 0.2);
+}
+
+// 系統自動掃描雷達：判斷是否入聽
+function checkRadar() {
+    canRichiRadar = false;
+    for (let i = 0; i < hand.length; i++) {
+        if (checkSpecificRichi(i)) {
+            canRichiRadar = true;
+            return;
+        }
+    }
+}
+
+function checkSpecificRichi(hIdx) {
+    const allUnique = getAllUniqueTiles();
+    for (let testTile of allUnique) {
+        let tempHand = JSON.parse(JSON.stringify(hand));
+        tempHand[hIdx] = testTile;
+        if (calculateTotalTai(tempHand, flowersWon, true)) return true;
+    }
+    return false;
+}
+
+function getAllUniqueTiles() {
+    let list = [];
+    ['MAN','TONG','TIAO'].forEach(type => { for(let i=1;i<=9;i++) list.push({type, val:i, txt:TILES_DATA[type][i-1]}); });
+    ['WIND','DRAGON'].forEach(type => { TILES_DATA[type].forEach(txt => list.push({type, txt, val:null})); });
+    return list;
+}
+
+function calculateTotalTai(h, flowers, isSilent = false) {
     let taiList = [];
     const counts = {}; h.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
-
-    // --- 核心修正：底台增加為 3 台 ---
-    taiList.push({ name: "底台", tai: 3 });
-
+    taiList.push({ name: "底台", tai: 2 });
+    if (isRichi) taiList.push({ name: "立直", tai: 2 });
     const seatIdx = WIND_ORDER.indexOf(seatWind); 
     let flowerIndices = flowers.map(f => TILES_DATA['FLOWER'].indexOf(f.txt));
     flowerIndices.forEach(idx => { if (idx === seatIdx || idx === seatIdx + 4) taiList.push({ name: `正花(${FLOWER_NAMES[idx]})`, tai: 1 }); });
@@ -191,10 +216,8 @@ function calculateTotalTai(h, flowers) {
     let set2 = [4,5,6,7].every(i => flowerIndices.includes(i));
     if (set1) taiList.push({ name: "四季全", tai: 2 });
     if (set2) taiList.push({ name: "四君子", tai: 2 });
-
     let pairs = 0; for (let k in counts) pairs += Math.floor(counts[k]/2);
-    if (pairs === 7) return [{ name: "七對子", tai: 4 }, ...taiList];
-
+    if (pairs === 8) return [{ name: "八對子", tai: 4 }, ...taiList];
     let best = null;
     for (let key in counts) {
         if (counts[key] >= 2) {
@@ -203,25 +226,19 @@ function calculateTotalTai(h, flowers) {
         }
     }
     if (!best) return null;
-
     const m = best.mianzi; const keCount = m.filter(x => x.type === 'ke').length;
-    if (keCount === 4) taiList.push({ name: "對對胡", tai: 4 });
+    if (keCount === 5) taiList.push({ name: "對對胡", tai: 4 });
     let dragons = ['DRAGON🀄', 'DRAGON🀅', 'DRAGON🀆'];
     let dKe = dragons.filter(d => m.some(x => x.type === 'ke' && x.tile === d)).length;
     if (dKe === 3) taiList.push({ name: "大三元", tai: 8 });
     else if (dKe === 2 && dragons.some(d => best.jiang === d)) taiList.push({ name: "小三元", tai: 4 });
-    else dragons.forEach(d => { if(m.some(x => x.type === 'ke' && x.tile === d)) taiList.push({ name: `字台(${d[d.length-1]})`, tai: 1 }); });
     if (m.some(x => x.type === 'ke' && x.tile === 'WIND'+roundWind)) taiList.push({ name: "場風台", tai: 1 });
     if (m.some(x => x.type === 'ke' && x.tile === 'WIND'+seatWind)) taiList.push({ name: "門風台", tai: 1 });
-
     const types = new Set(h.map(t => t.type));
     const suitC = Array.from(types).filter(t => ['MAN','TONG','TIAO'].includes(t)).length;
     if (suitC === 1 && !(types.has('WIND') || types.has('DRAGON'))) taiList.push({ name: "清一色", tai: 8 });
     else if (suitC === 1 && (types.has('WIND') || types.has('DRAGON'))) taiList.push({ name: "混一色", tai: 4 });
-
-    if (taiList.length === 1 || (taiList.length > 1 && taiList.every(t => t.name === "底台" || t.name.includes("花")))) {
-        taiList.push({ name: "平胡", tai: 1 });
-    }
+    if (taiList.length === (isRichi?2:1) || (taiList.length > 1 && taiList.every(t => ["底台","立直"].includes(t.name) || t.name.includes("花")))) taiList.push({ name: "平胡", tai: 1 });
     return taiList;
 }
 
@@ -252,42 +269,74 @@ function draw() {
     ctx.font = "bold 40px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#fff";
     ctx.fillText(`${roundWind}風圈 / 門風${seatWind}`, 360, 60);
     ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
-    ctx.fillStyle = "#fc0"; ctx.fillText(`時間: ${Math.ceil(timeLeft)}s`, 540, 130);
+    ctx.fillStyle = isRichi ? "#f44" : "#fc0"; ctx.fillText(`時間: ${Math.ceil(timeLeft)}s`, 540, 130);
     ctx.fillText(`總分: ${totalScore.toLocaleString()}`, 360, 190);
+    
     ctx.font = "24px Arial"; ctx.fillStyle = "rgba(255,255,255,0.4)";
     let curSeat = WIND_ORDER.indexOf(seatWind);
-    ctx.fillText(`牌庫: ${deck.length} | 本局正花: ${FLOWER_NAMES[curSeat]}, ${FLOWER_NAMES[curSeat+4]}`, 360, 440);
+    ctx.fillText(`牌庫: ${deck.length} | 正花: ${FLOWER_NAMES[curSeat]}, ${FLOWER_NAMES[curSeat+4]}`, 360, 440);
+    
     flowersWon.forEach(f => drawTile(f.x, f.y, f.txt, '#f57c00', 50, 70, false, 28));
     pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
 
     if (gameStatus === 'PLAYING') {
-        ctx.fillStyle = (deck.length > 0) ? "#e64a19" : "#ff4444";
-        ctx.beginPath(); ctx.roundRect(200, 880, 320, 80, 15); ctx.fill();
-        ctx.fillStyle = "#fff"; ctx.font = "bold 35px Arial"; ctx.fillText(deck.length > 0 ? "更換牌池" : "手動流局", 360, 935);
-        ctx.font = "24px Arial"; ctx.fillText(`已換牌: ${swapActionCount}/3`, 360, 860);
+        ctx.fillStyle = (deck.length > 0 && !isRichi) ? "#e64a19" : "#444";
+        ctx.beginPath(); ctx.roundRect(50, 880, 240, 80, 15); ctx.fill();
+        ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; ctx.fillText("更換牌池", 170, 930);
+        
+        // 聽牌按鈕：入聽後才亮紅色 (d32f2f)
+        ctx.fillStyle = isRichi ? "#555" : (canRichiRadar ? "#d32f2f" : "#333");
+        ctx.beginPath(); ctx.roundRect(310, 880, 360, 80, 15); ctx.fill();
+        ctx.fillStyle = (canRichiRadar && !isRichi) ? "#fff" : "#888"; 
+        ctx.fillText(isRichi ? "聽牌中..." : "聽牌立直 (+2台)", 490, 930);
+        
+        if(richiHint) {
+            ctx.fillStyle = "#f44"; ctx.font = "bold 28px Arial"; ctx.fillText(richiHint, 360, 860);
+        }
     }
+    
     ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 950, GW, 330);
-    hand.forEach((t, i) => drawTile(t.x, t.y - (i===selectedHandIndex?45:0), t.txt, getCol(t.type), 85, 125, i===selectedHandIndex));
+    hand.forEach((t, i) => {
+        // 修正：亮起廢牌提示 (當聽牌按鈕亮起且打掉這張能聽牌時)
+        let isWaste = false;
+        if(canRichiRadar && !isRichi && !winPending) {
+            if(checkSpecificRichi(i)) isWaste = true;
+        }
+        drawTile(t.x, t.y - (i===selectedHandIndex?45:0), t.txt, getCol(t.type), 85, 125, i===selectedHandIndex, null, isWaste);
+    });
+
+    if (winPending && gameStatus === 'PLAYING') {
+        ctx.fillStyle = "#fc0"; ctx.font = "bold 120px Arial"; ctx.shadowBlur = 20; ctx.shadowColor = "#000";
+        ctx.fillText("榮 和 !", 360, 640); ctx.shadowBlur = 0;
+    }
     
     if (gameStatus === 'WIN_ANIM') {
         ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
         ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
-        ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.fillText(winInfo.totalTai > 0 ? `${winInfo.totalTai} 台!` : winInfo.names[0], 0, -180);
+        ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.fillText(winInfo.totalTai > 0 ? `${winInfo.totalTai} 台!` : "流局", 0, -180);
         ctx.fillStyle = "#0f0"; ctx.font = "bold 50px Arial"; if (winInfo.rewardMoves > 0) ctx.fillText(`+${winInfo.rewardMoves} 步獎勵`, 0, -100);
         ctx.fillStyle = "#fff"; ctx.font = "30px Arial"; winInfo.names.forEach((n, i) => { if(winInfo.totalTai > 0) ctx.fillText(n, 0, -20 + i * 40); });
-        ctx.fillStyle = "#aaa"; ctx.fillText("點擊繼續下一局", 0, 320);
-        ctx.restore();
+        ctx.fillStyle = "#aaa"; ctx.fillText("點擊進入下一局", 0, 320); ctx.restore();
         if(winInfo.scale < 1) winInfo.scale += 0.05;
     }
-    if (gameStatus === 'START_SCREEN') drawOverlay("拾八雀：算番競技", "開始挑戰", "#fc0");
+    if (gameStatus === 'START_SCREEN') drawOverlay("拾八雀：聽牌雷達版", "開始挑戰", "#fc0");
     if (gameStatus === 'FAIL') drawOverlay("生命耗盡", "重新開始", "#f44");
 }
 
-function drawOverlay(title, btnText, btnCol) {
-    ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0, 0, GW, GH);
-    ctx.fillStyle = "#fff"; ctx.font = "bold 80px Arial"; ctx.textAlign = "center"; ctx.fillText(title, 360, 500);
-    ctx.fillStyle = btnCol; ctx.beginPath(); ctx.roundRect(200, 600, 320, 120, 20); ctx.fill();
-    ctx.fillStyle = "#000"; ctx.font = "bold 50px Arial"; ctx.fillText(btnText, 360, 675);
+async function handleRichi() {
+    if (selectedHandIndex === -1) {
+        richiHint = "請先選擇要棄哪張牌";
+        setTimeout(() => richiHint = "", 2000);
+        return;
+    }
+    if (checkSpecificRichi(selectedHandIndex)) {
+        isRichi = true;
+        playTone(1200, 0.5);
+        selectedHandIndex = -1; 
+    } else {
+        richiHint = "打掉此牌無法聽牌";
+        setTimeout(() => richiHint = "", 2000);
+    }
 }
 
 function handleInput(e) {
@@ -297,10 +346,17 @@ function handleInput(e) {
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const mx = (clientX - rect.left) / scale;
     const my = (clientY - rect.top) / scale;
+
     if (gameStatus === 'START_SCREEN' || gameStatus === 'FAIL') { resetAndStart(true); return; }
     if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) { resetAndStart(false); return; }
-    if (gameStatus !== 'PLAYING') return;
-    if (mx > 200 && mx < 520 && my > 880 && my < 960) { if (deck.length > 0) fillFullPool(); else triggerDrawGame(); return; }
+    if (gameStatus !== 'PLAYING' || winPending) return;
+
+    if (my > 880 && my < 960) {
+        if (mx > 50 && mx < 290 && deck.length > 0 && !isRichi) { fillFullPool(); return; }
+        if (mx > 310 && mx < 670 && !isRichi) { handleRichi(); return; }
+    }
+    if (isRichi) return; 
+
     if (my > 950) {
         hand.forEach((t, i) => {
             const x = 85 + (i % 7) * 92, y = 1080 + Math.floor(i / 7) * 145;
@@ -319,6 +375,43 @@ function handleInput(e) {
     }
 }
 
+function update() {
+    const now = Date.now(), dt = (now - lastTimestamp) / 1000;
+    lastTimestamp = now;
+    glowValue = (Math.sin(now / 150) + 1) / 2; 
+
+    if (gameStatus === 'PLAYING' && !winPending) {
+        timeLeft -= isRichi ? dt * 2 : dt; 
+        if (timeLeft <= 0) gameStatus = 'FAIL';
+
+        if (isRichi) {
+            richiAutoTimer += dt;
+            if (richiAutoTimer > 0.8) { 
+                richiAutoTimer = 0;
+                if (deck.length > 0) {
+                    let foundWin = false;
+                    for(let pIdx=0; pIdx<pool.length; pIdx++){
+                        for(let hIdx=0; hIdx<hand.length; hIdx++){
+                            let testHand = JSON.parse(JSON.stringify(hand));
+                            testHand[hIdx] = pool[pIdx];
+                            if(calculateTotalTai(testHand, flowersWon, true)){
+                                foundWin = true; performSwap(hIdx, pIdx); return;
+                            }
+                        }
+                    }
+                    if(!foundWin) fillFullPool();
+                } else { checkFinalPossibility(); }
+            }
+        }
+    }
+    pool.forEach(p => { p.x += (p.targetX - p.x) * 0.15; p.y += (p.targetY - p.y) * 0.15; });
+    hand.forEach((t, i) => {
+        let tx = 85 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
+        t.x += (tx - t.x) * 0.18; t.y += (ty - t.y) * 0.18;
+    });
+    flowersWon.forEach(f => { if(f.targetX) { f.x += (f.targetX - f.x) * 0.1; f.y += (f.targetY - f.y) * 0.1; } });
+}
+
 function createDeck() {
     let d = [];
     ['MAN', 'TONG', 'TIAO'].forEach(type => { for (let i = 1; i <= 9; i++) { for (let n = 0; n < 4; n++) d.push({ type, val: i, txt: TILES_DATA[type][i-1] }); } });
@@ -328,8 +421,13 @@ function createDeck() {
     return d;
 }
 
-function drawTile(x, y, txt, color, w, h, isSel, fs) {
+function drawTile(x, y, txt, color, w, h, isSel, fs, isGlow = false) {
     ctx.save(); ctx.translate(x, y);
+    if (isGlow) {
+        ctx.shadowBlur = 20 * glowValue; ctx.shadowColor = "#f00";
+        ctx.strokeStyle = `rgba(255, 0, 0, ${glowValue})`; ctx.lineWidth = 10;
+        ctx.strokeRect(-w/2-5, -h/2-5, w+10, h+10);
+    }
     ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
     ctx.strokeStyle = isSel ? "#fc0" : "#bbb"; ctx.lineWidth = isSel?5:2; ctx.stroke();
     ctx.fillStyle = color; ctx.font = `bold ${fs || w*0.75}px Arial`; ctx.textAlign="center"; ctx.textBaseline = "middle"; ctx.fillText(txt||'?', 0, 0);
@@ -341,26 +439,13 @@ function sortHand() {
     hand.sort((a,b) => { if(a.type !== b.type) return order[a.type] - order[b.type]; return (a.val || a.txt).toString().localeCompare((b.val || b.txt).toString()); });
 }
 
-function getCol(t) { 
-    if(t==='MAN') return '#d32f2f'; if(t==='TONG') return '#1976d2'; if(t==='TIAO') return '#2e7d32';
-    return '#4a148c'; 
+function getCol(t) { if(t==='MAN') return '#d32f2f'; if(t==='TONG') return '#1976d2'; if(t==='TIAO') return '#2e7d32'; return '#4a148c'; }
+function drawOverlay(title, btnText, btnCol) {
+    ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0, 0, GW, GH);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 80px Arial"; ctx.textAlign = "center"; ctx.fillText(title, 360, 500);
+    ctx.fillStyle = btnCol; ctx.beginPath(); ctx.roundRect(200, 600, 320, 120, 20); ctx.fill();
+    ctx.fillStyle = "#000"; ctx.font = "bold 50px Arial"; ctx.fillText(btnText, 360, 675);
 }
-
-function update() {
-    const now = Date.now(), dt = (now - lastTimestamp) / 1000;
-    lastTimestamp = now;
-    if (gameStatus === 'PLAYING') {
-        timeLeft -= dt; if (timeLeft <= 0) gameStatus = 'FAIL';
-        if (deck.length === 0 && !drawGamePending) checkFinalPossibility();
-    }
-    pool.forEach(p => { p.x += (p.targetX - p.x) * 0.15; p.y += (p.targetY - p.y) * 0.15; });
-    hand.forEach((t, i) => {
-        let tx = 85 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
-        t.x += (tx - t.x) * 0.18; t.y += (ty - t.y) * 0.18;
-    });
-    flowersWon.forEach(f => { if(f.targetX) { f.x += (f.targetX - f.x) * 0.1; f.y += (f.targetY - f.y) * 0.1; } });
-}
-
 function loop() { update(); draw(); requestAnimationFrame(loop); }
 init();
 </script>
