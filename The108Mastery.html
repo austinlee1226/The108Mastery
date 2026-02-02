@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>拾肆雀：生存競技 (街機版)</title>
+    <title>拾肆雀：Arcade Mode</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -30,8 +30,7 @@ let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
 
 let winInfo = { names: [], totalTai: 0, scale: 0, thisWinTotal: 0 };
 let drawGamePending = false, winPending = false; 
-let isRichi = false, richiAutoTimer = 0, glowValue = 0;
-let isPlayerTenpai = false; 
+let glowValue = 0;
 
 const WIND_ORDER = ['🀀', '🀁', '🀂', '🀃'];
 let roundWind = '🀀', seatWind = '🀀';
@@ -73,19 +72,19 @@ function resize() {
     ctx.scale(scale, scale);
 }
 
-// --- 核心修改：固定數值邏輯 ---
+// --- 核心修改：固定數值 (Arcade Mode) ---
 function resetAndStart(isFullReset) {
     if(isFullReset) { 
         totalScore = 0; 
         gameCount = 0; 
-        winInfo = { totalTai: 0 }; 
     } else { 
         gameCount++; 
     }
 
-    // --- 修改點：固定步數與時間 ---
-    movesLeft = 15;   // 固定 15 步
-    timeLeft = 60;    // 固定 60 秒
+    // --- 固定數值設定 ---
+    movesLeft = 15;   // 每局固定 15 步
+    timeLeft = 60;    // 每局固定 60 秒
+    winInfo = { totalTai: 0 }; 
 
     seatWind = WIND_ORDER[gameCount % 4];
     roundWind = WIND_ORDER[Math.floor((gameCount / 4) % 4)];
@@ -93,7 +92,6 @@ function resetAndStart(isFullReset) {
     swapActionCount = 0; flowersWon = []; gangsWon = [];
     selectedHandIndex = -1; selectedPoolIndex = -1;
     drawGamePending = false; winPending = false;
-    isRichi = false; richiAutoTimer = 0; isPlayerTenpai = false;
     
     startOpeningSequence();
 }
@@ -188,9 +186,8 @@ async function performSwap(hIdx, pIdx) {
         winPending = true; playTone(987, 0.3); await delay(1200); 
         triggerWin(results);
     } else {
-        if (!isPlayerTenpai) {
-            movesLeft--; 
-        }
+        // --- 始終扣除步數 ---
+        movesLeft--; 
         swapActionCount++; playTone(440, 0.05);
         
         hand[hIdx] = poolTile;
@@ -261,7 +258,7 @@ function calculateTotalTai(h, flowers, gangs) {
     let taiList = [{ name: "底台", tai: 2 }];
     const counts = {}; checkH.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
     
-    if (isRichi) taiList.push({ name: "立直", tai: 2 });
+    // 移除了 "立直" 台數計算
 
     const seatIdx = WIND_ORDER.indexOf(seatWind);
     flowers.forEach(f => {
@@ -341,9 +338,10 @@ function checkFinalPossibility() {
 }
 
 function triggerDrawGame() {
-    // 流局沒有獎勵，步數也不扣（因為下局固定 15）
     winInfo = { names: ["流局"], totalTai: 0, scale: 0, thisWinTotal: 0 };
+    // 這裡不做任何懲罰，因為步數每一局都會重置為 15
     gameStatus = 'WIN_ANIM'; playTone(150, 0.8);
+    // 但如果此時步數為0，其實在 performSwap 就會觸發 FAIL，這裡主要是處理牌抽乾的情況
 }
 
 function drawTile(x, y, txt, color, w, h, isS, fs, isG = false) {
@@ -362,18 +360,13 @@ function draw() {
     ctx.clearRect(0, 0, GW, GH);
     ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(0, 0, GW, 220);
     
-    // --- UI 更新：顯示局數與圈風 ---
     ctx.font = "bold 36px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#fff";
     ctx.fillText(`第 ${gameCount + 1} 局 | ${roundWind}圈 ${seatWind}門`, 360, 60);
     
-    // 顯示步數 (固定 15)
-    if (isPlayerTenpai) {
-        ctx.fillStyle = "#0f0"; ctx.fillText(`步數: FREE`, 180, 130);
-    } else {
-        ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
-    }
+    // 移除了 "FREE" 的顯示邏輯
+    ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
 
-    ctx.fillStyle = isRichi ? "#f44" : "#fc0"; ctx.fillText(`時間: ${Math.ceil(timeLeft)}s`, 540, 130);
+    ctx.fillStyle = "#fc0"; ctx.fillText(`時間: ${Math.ceil(timeLeft)}s`, 540, 130);
     ctx.fillText(`總分: ${totalScore.toLocaleString()}`, 360, 190);
     
     flowersWon.forEach(f => drawTile(f.x, f.y, f.txt, '#f57c00', 50, 70, false, 28));
@@ -393,16 +386,8 @@ function draw() {
 
     let gangOptions = getGangOptions();
     
+    // --- 移除了 "聽牌立直" 的按鈕繪製 ---
     if (gameStatus === 'PLAYING') {
-        let canRadar = false; 
-        for(let i=0; i<hand.length; i++) if(checkSpecificRichi(i)) { canRadar=true; break; }
-        isPlayerTenpai = canRadar; 
-
-        ctx.fillStyle = isRichi ? "#555" : (canRadar ? "#d32f2f" : "#333");
-        ctx.beginPath(); ctx.roundRect(180, 880, 360, 80, 15); ctx.fill();
-        ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; 
-        ctx.fillText(isRichi ? "聽牌中..." : "聽牌立直 (+2台)", 360, 930);
-
         if(gangOptions.length > 0 && deck.length > 0 && !winPending) {
             gangOptions.forEach((key, idx) => {
                 let btnX = 620, btnY = 900 - idx * 100;
@@ -417,8 +402,8 @@ function draw() {
     
     ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 950, GW, 330);
     hand.forEach((t, i) => {
-        let isWaste = !isRichi && !winPending && checkSpecificRichi(i);
-        drawTile(t.x, t.y - (i===selectedHandIndex?45:0), t.txt, getCol(t.type), 92, 132, i===selectedHandIndex, null, isWaste);
+        // 移除了 checkSpecificRichi 的高亮提示
+        drawTile(t.x, t.y - (i===selectedHandIndex?45:0), t.txt, getCol(t.type), 92, 132, i===selectedHandIndex, null);
     });
 
     if (winPending && gameStatus === 'PLAYING') {
@@ -426,7 +411,7 @@ function draw() {
     }
     
     if (gameStatus === 'WIN_ANIM') drawWinOverlay();
-    if (gameStatus === 'START_SCREEN') drawOverlay("拾肆雀：街機版", "開始挑戰", "#fc0");
+    if (gameStatus === 'START_SCREEN') drawOverlay("拾肆雀：Arcade", "開始挑戰", "#fc0");
     if (gameStatus === 'FAIL') drawOverlay("挑戰失敗", "重新開始", "#f44");
 }
 
@@ -436,7 +421,6 @@ function getGangOptions() {
     return Object.keys(counts).filter(k => counts[k] === 4);
 }
 
-// --- 核心修改：結算畫面 ---
 function drawWinOverlay() {
     ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
     ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
@@ -455,15 +439,12 @@ function drawWinOverlay() {
         ctx.fillStyle = "#fff"; ctx.font = "32px Arial"; ctx.textAlign="center";
         ctx.fillText(`本局得分：+${winInfo.thisWinTotal.toLocaleString()}`, 0, 100);
         
-        // 簡單顯示下一局提示
+        // --- 顯示固定步數重置 ---
         ctx.fillStyle = "#0fc"; ctx.font = "bold 36px Arial";
-        ctx.fillText(`下一局準備:`, 0, 200);
-        ctx.font = "bold 50px Arial";
-        ctx.fillText(`15 步 / 60 秒`, 0, 260);
-
+        ctx.fillText(`下局步數重置: 15 步`, 0, 200);
     } else {
          ctx.fillStyle = "#f44"; ctx.font = "bold 32px Arial";
-         ctx.fillText("無得分，下局繼續", 0, 150);
+         ctx.fillText("流局 - 下局重置 15 步", 0, 150);
     }
     
     ctx.fillStyle = "#aaa"; ctx.font = "24px Arial"; ctx.fillText("點擊繼續", 0, 400); ctx.restore();
@@ -472,24 +453,11 @@ function drawWinOverlay() {
 
 function triggerWin(results) {
     const sumTai = results.reduce((a, b) => a + b.tai, 0);
-    // 台數越高，分數加成越多
-    const earned = (sumTai * 200) + (Math.floor(timeLeft) * 10) + (movesLeft * 50);
+    const earned = (sumTai + Math.floor(timeLeft) + movesLeft) * 100;
     totalScore += earned; 
     
     winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, scale: 0, thisWinTotal: earned };
     gameStatus = 'WIN_ANIM'; playTone(880, 0.2);
-}
-
-function checkSpecificRichi(hIdx) {
-    const allU = [];
-    ['MAN','TONG','TIAO'].forEach(type => { for(let i=1;i<=9;i++) allU.push({type, val:i, txt:TILES_DATA[type][i-1]}); });
-    ['WIND','DRAGON'].forEach(type => { TILES_DATA[type].forEach(txt => allU.push({type, txt, val:null})); });
-    
-    for (let testTile of allU) {
-        let tempHand = JSON.parse(JSON.stringify(hand)); tempHand[hIdx] = testTile;
-        if (calculateTotalTai(tempHand, flowersWon, gangsWon)) return true;
-    }
-    return false;
 }
 
 function handleInput(e) {
@@ -509,14 +477,9 @@ function handleInput(e) {
             if(my > btnY-70 && my < btnY-10) { performGang(gangOptions[idx], false); return; }
         }
     }
+    
+    // --- 移除了按鈕點擊偵測 ---
 
-    if (my > 880 && my < 960) {
-        if (mx > 180 && mx < 540 && !isRichi) {
-            if (selectedHandIndex !== -1 && checkSpecificRichi(selectedHandIndex)) { isRichi = true; selectedHandIndex = -1; playTone(1200, 0.5); }
-            return;
-        }
-    }
-    if (isRichi) return;
     hand.forEach((t, i) => { 
         let tx = 85 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
         if (Math.abs(mx - tx) < 45 && Math.abs(my - ty) < 65) {
@@ -536,28 +499,9 @@ function update() {
     const now = Date.now(), dt = (now - lastTimestamp) / 1000; lastTimestamp = now;
     glowValue = (Math.sin(now / 150) + 1) / 2; 
     if (gameStatus === 'PLAYING' && !winPending) {
-        timeLeft -= isRichi ? dt * 2 : dt; if (timeLeft <= 0) gameStatus = 'FAIL';
-        if (isRichi) {
-            richiAutoTimer += dt;
-            if (richiAutoTimer > 0.6) { 
-                richiAutoTimer = 0;
-                if (deck.length > 0) {
-                    let madeMove = false;
-                    for(let pIdx=0; pIdx<pool.length; pIdx++) {
-                        for(let hIdx=0; hIdx<hand.length; hIdx++){
-                            let th = JSON.parse(JSON.stringify(hand)); th[hIdx] = pool[pIdx];
-                            if(calculateTotalTai(th, flowersWon, gangsWon)) { performSwap(hIdx, pIdx); madeMove = true; break; }
-                        }
-                        if(madeMove) break;
-                    }
-                    if (!madeMove && !winPending) {
-                        let rHand = Math.floor(Math.random() * hand.length);
-                        let rPool = Math.floor(Math.random() * pool.length);
-                        performSwap(rHand, rPool);
-                    }
-                } else checkFinalPossibility();
-            }
-        }
+        timeLeft -= dt; // 移除了立直的時間加速邏輯
+        if (timeLeft <= 0) gameStatus = 'FAIL';
+        // 移除了自動代打 (Auto-play) 邏輯
     }
     pool.forEach(p => { p.x += (p.targetX - p.x) * 0.15; p.y += (p.targetY - p.y) * 0.15; });
     hand.forEach((t, i) => { 
