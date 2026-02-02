@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>拾肆雀：Arcade Plus (含槓牌版)</title>
+    <title>Pixel JD - 拾八雀：正統 13張修復版</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -12,494 +12,354 @@
     </style>
 </head>
 <body>
+
 <div id="canvasContainer">
     <canvas id="gameCanvas"></canvas>
 </div>
 
 <script>
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
-const GW = 720, GH = 1280;
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const GW = 720, GH = 1280;
 
-let gameStatus = 'START_SCREEN'; 
-let totalScore = 0, movesLeft = 15, timeLeft = 60;
-let hand = [], pool = [], deck = [], flowersWon = [], gangsWon = []; 
-let swapActionCount = 0, gameCount = 0; 
-let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
-let isTenpai = false; 
-let richiPad = []; 
+    const TILES_DATA = {
+        'MAN':    ['🀇','🀈','🀉','🀊','🀋','🀌','🀍','🀎','🀏'],
+        'TONG':   ['🀙','🀚','🀛','🀜','🀝','🀞','🀟','🀠','🀡'],
+        'TIAO':   ['🀐','🀑','🀒','🀓','🀔','🀕','🀖','🀗','🀘'],
+        'WIND':   ['🀀','🀁','🀂','🀃'], 
+        'DRAGON': ['🀄','🀅','🀆']
+    };
 
-// --- 新增槓牌相關變數 ---
-let gangCandidates = []; // 存儲可槓的牌型 Key
-let isGangSelecting = false; // 是否處於選擇槓牌模式
-// ---------------------
+    let gameStatus = 'START_SCREEN', totalScore = 0, movesLeft = 10, timeLeft = 60;
+    let hand = [], pool = [], deck = [];
+    let selectedHandIndex = -1, selectedPoolIndex = -1;
+    let lastTimestamp = 0, isRichi = false, richiAutoTimer = 0;
+    let winInfo = { names: [], totalFan: 0, scale: 0 };
+    let hintMessage = "選一張廢牌後點擊報聽";
 
-let winInfo = { names: [], totalTai: 0, scale: 0, thisWinTotal: 0 };
-let winPending = false; 
-let glowValue = 0;
+    function playTone(freq, dur, vol = 0.1) {
+        if (!window.audioCtx) window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = window.audioCtx.createOscillator();
+        const g = window.audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, window.audioCtx.currentTime);
+        g.gain.setValueAtTime(vol, window.audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.0001, window.audioCtx.currentTime + dur);
+        osc.connect(g); g.connect(window.audioCtx.destination);
+        osc.start(); osc.stop(window.audioCtx.currentTime + dur);
+    }
 
-const WIND_ORDER = ['🀀', '🀁', '🀂', '🀃'];
-let roundWind = '🀀', seatWind = '🀀';
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        canvas.addEventListener('pointerdown', handleInput);
+        lastTimestamp = Date.now();
+        requestAnimationFrame(loop);
+    }
 
-const TILES_DATA = {
-    'MAN':  ['🀇','🀈','🀉','🀊','🀋','🀌','🀍','🀎','🀏'],
-    'TONG': ['🀙','🀚','🀛','🀜','🀝','🀞','🀟','🀠','🀡'],
-    'TIAO': ['🀐','🀑','🀒','🀓','🀔','🀕','🀖','🀗','🀘'],
-    'WIND': ['🀀','🀁','🀂','🀃'], 
-    'DRAGON':['🀄','🀅','🀆'],    
-    'FLOWER':['🀢','🀣','🀤','🀥','🀦','🀧','🀨','🀩'] 
-};
+    function resize() {
+        const scale = Math.min(window.innerWidth / GW, window.innerHeight / GH);
+        canvas.width = GW * scale; canvas.height = GH * scale;
+        ctx.scale(scale, scale);
+    }
 
-const delay = ms => new Promise(res => setTimeout(res, ms));
-
-function playTone(freq, dur, vol = 0.1) {
-    if (!window.audioCtx) window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = window.audioCtx.createOscillator();
-    const g = window.audioCtx.createGain();
-    osc.connect(g); g.connect(window.audioCtx.destination);
-    osc.start(); osc.stop(window.audioCtx.currentTime + dur);
-}
-
-function init() {
-    resize();
-    window.addEventListener('resize', resize);
-    canvas.addEventListener('pointerdown', handleInput);
-    lastTimestamp = Date.now();
-    requestAnimationFrame(loop);
-}
-
-function resize() {
-    const scale = Math.min(window.innerWidth / GW, window.innerHeight / GH);
-    canvas.width = GW * scale; canvas.height = GH * scale;
-    ctx.scale(scale, scale);
-}
-
-function resetAndStart(isFullReset) {
-    if(isFullReset) { totalScore = 0; gameCount = 0; } else { gameCount++; }
-    movesLeft = 15; timeLeft = 60; winInfo = { totalTai: 0 }; 
-    seatWind = WIND_ORDER[gameCount % 4];
-    roundWind = WIND_ORDER[Math.floor((gameCount / 4) % 4)];
-    swapActionCount = 0; flowersWon = []; gangsWon = [];
-    selectedHandIndex = -1; selectedPoolIndex = -1;
-    winPending = false; isTenpai = false; richiPad = [];
-    gangCandidates = []; isGangSelecting = false; // 重置槓牌狀態
-    startOpeningSequence();
-}
-
-async function startOpeningSequence() {
-    gameStatus = 'DEALING';
-    let validDeal = false;
-    
-    while(!validDeal) {
+    async function resetAndStart(isFullReset) {
+        if(isFullReset) { totalScore = 0; movesLeft = 10; }
+        timeLeft = 60; selectedHandIndex = -1; selectedPoolIndex = -1;
+        isRichi = false; richiAutoTimer = 0;
+        hintMessage = "選一張廢牌後點擊報聽";
+        
+        gameStatus = 'DEALING';
         deck = createDeck();
-        let testHand = deck.slice(-14);
-        let check = calculateTotalTai(testHand, [], []);
-        if(!check || (check.reduce((a,b)=>a+b.tai,0) <= 4)) validDeal = true;
-    }
+        hand = []; pool = [];
 
-    hand = []; pool = [];
-    const grabbingSteps = [4, 3, 3, 3, 1]; 
-    for(let stepCount of grabbingSteps) {
-        for(let i = 0; i < stepCount; i++) {
-            let t = deck.pop(); t.x = 800; t.y = 1080; 
+        for(let i = 0; i < 13; i++) {
+            let t = deck.pop();
+            t.x = 800; t.y = 1100;
             hand.push(t);
-            playTone(500 + (hand.length * 30), 0.08, 0.05);
-            await delay(60); 
+            playTone(500 + (i * 30), 0.08, 0.05);
+            await new Promise(r => setTimeout(r, 60));
         }
-    }
-    await handleFlowers();
-    sortHand(); 
-    fillFullPool();
-    checkGangStatus(); // 檢查起手是否有暗槓
-    checkTenpaiStatus();
-    gameStatus = 'PLAYING';
-}
-
-async function handleFlowers() {
-    let hasFlower = true;
-    while(hasFlower) {
-        hasFlower = false;
-        for(let i = 0; i < hand.length; i++) {
-            if(hand[i].type === 'FLOWER') {
-                playTone(1100, 0.1, 0.1);
-                flowersWon.push(hand[i]);
-                if(deck.length === 0) deck = createDeck();
-                let newTile = deck.pop();
-                newTile.x = hand[i].x; newTile.y = hand[i].y;
-                hand[i] = newTile;
-                hasFlower = true; await delay(200); break;
-            }
-        }
-    }
-}
-
-function fillFullPool() {
-    pool = [];
-    let tempDeck = deck.filter(t => t.type !== 'FLOWER');
-    for(let i=0; i<15; i++) {
-        let t = tempDeck.pop();
-        t.targetX = 110 + (i % 5) * 125; t.targetY = 480 + Math.floor(i / 5) * 145;
-        t.x = GW/2; t.y = GH/2;
-        pool.push(t);
-    }
-}
-
-// --- 槓牌邏輯 ---
-function checkGangStatus() {
-    const counts = {};
-    hand.forEach(t => {
-        const key = t.type + (t.val || t.txt);
-        counts[key] = (counts[key] || 0) + 1;
-    });
-    gangCandidates = Object.keys(counts).filter(k => counts[k] === 4);
-    if (gangCandidates.length === 0) isGangSelecting = false;
-}
-
-async function performGang(targetKey) {
-    if (gameStatus !== 'PLAYING') return;
-
-    // 1. 紀錄要槓的牌
-    const exampleTile = hand.find(t => (t.type + (t.val || t.txt)) === targetKey);
-    
-    // 2. 移除手牌中的 4 張
-    hand = hand.filter(t => (t.type + (t.val || t.txt)) !== targetKey);
-    
-    // 3. 加入槓牌區
-    gangsWon.push({ isAnGang: true, tile: exampleTile, txt: exampleTile.txt });
-    
-    // 4. 嶺上開花
-    if(deck.length === 0) deck = createDeck();
-    let newTile = deck.pop();
-    newTile.x = GW / 2; newTile.y = GH + 100;
-    hand.push(newTile);
-    
-    // 5. 效果與重置
-    playTone(300, 0.1); 
-    setTimeout(() => playTone(800, 0.1), 150);
-    
-    isGangSelecting = false;
-    selectedHandIndex = -1;
-    
-    sortHand(); 
-    checkGangStatus(); 
-    
-    // 槓完後檢查是否胡牌
-    let results = calculateTotalTai(hand, flowersWon, gangsWon);
-    if (results) {
-        await delay(300);
-        winPending = true; playTone(987, 0.3); triggerWin(results);
-    } else {
-        checkTenpaiStatus();
-    }
-}
-
-function handleGangClick() {
-    if (gangCandidates.length === 0) return;
-    if (gangCandidates.length === 1) {
-        performGang(gangCandidates[0]);
-    } else {
-        isGangSelecting = !isGangSelecting; 
-        playTone(600, 0.05);
-    }
-}
-// ----------------
-
-async function performSwap(hIdx, pIdx) {
-    if (gameStatus !== 'PLAYING' || winPending) return;
-    
-    const poolTile = { ...pool[pIdx] };
-    let tempHand = [...hand]; tempHand[hIdx] = poolTile; 
-    let results = calculateTotalTai(tempHand, flowersWon, gangsWon);
-    
-    if (results) {
-        hand[hIdx] = poolTile; pool.splice(pIdx, 1);
-        selectedHandIndex = -1; selectedPoolIndex = -1;
-        sortHand(); await delay(200);
-        winPending = true; playTone(987, 0.3); triggerWin(results);
-    } else {
-        if (!isTenpai) movesLeft--; 
-        hand[hIdx] = poolTile;
-
-        if(deck.length === 0) deck = createDeck();
-        let newDeckTile = deck.pop();
-        newDeckTile.x = GW / 2; newDeckTile.y = GH + 100; 
-        newDeckTile.targetX = 110 + (pIdx % 5) * 125;
-        newDeckTile.targetY = 480 + Math.floor(pIdx / 5) * 145;
-
-        pool[pIdx] = newDeckTile;
         
-        playTone(300, 0.05); 
-        setTimeout(() => playTone(600, 0.05), 100); 
-        
-        selectedHandIndex = -1; selectedPoolIndex = -1;
+        let drawTile = deck.pop();
+        drawTile.x = 800; drawTile.y = 1100;
+        hand.push(drawTile);
+        playTone(800, 0.1, 0.1); 
+
         sortHand();
-        checkGangStatus(); // 換牌後檢查是否出現槓
-        checkTenpaiStatus(); 
-        if (movesLeft <= 0 && !isTenpai) gameStatus = 'FAIL';
-    }
-}
-
-function checkTenpaiStatus() {
-    let canRadar = false; 
-    richiPad = new Array(hand.length).fill(false);
-    for(let i=0; i<hand.length; i++) {
-        if(checkSpecificRichi(i)) { canRadar = true; richiPad[i] = true; }
-    }
-    isTenpai = canRadar;
-}
-
-function checkSpecificRichi(hIdx) {
-    const allU = [];
-    ['MAN','TONG','TIAO'].forEach(type => { for(let i=1;i<=9;i++) allU.push({type, val:i, txt:TILES_DATA[type][i-1]}); });
-    ['WIND','DRAGON'].forEach(type => { TILES_DATA[type].forEach(txt => allU.push({type, txt, val:null})); });
-    for (let testTile of allU) {
-        let tempHand = JSON.parse(JSON.stringify(hand)); tempHand[hIdx] = testTile;
-        if (calculateTotalTai(tempHand, flowersWon, gangsWon)) return true;
-    }
-    return false;
-}
-
-function calculateTotalTai(h, flowers, gangs) {
-    if (h.length !== (14 - gangs.length * 3)) return null;
-    let taiList = [{ name: "底台", tai: 2 }];
-    const counts = {}; h.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
-    const seatIdx = WIND_ORDER.indexOf(seatWind);
-    flowers.forEach(f => {
-        let idx = TILES_DATA['FLOWER'].indexOf(f.txt);
-        if (idx === seatIdx || idx === seatIdx + 4) taiList.push({ name: `正花`, tai: 1 });
-    });
-    gangs.forEach(g => taiList.push({ name: g.isAnGang?"暗槓":"明槓", tai: g.isAnGang?2:1 }));
-
-    let best = null;
-    for (let key in counts) { 
-        if (counts[key] >= 2) {
-            let tc = {...counts}; tc[key] -= 2; let m = [];
-            if (findMianzi(tc, m)) { best = { jiang: key, mianzi: m }; break; }
-        }
-    }
-    if (!best && gangs.length === 0) {
-        let pairs = 0; for (let k in counts) if(counts[k]>=2) pairs += Math.floor(counts[k]/2);
-        if (pairs === 7) return [{ name: "七對子", tai: 4 }, ...taiList];
-    }
-    if (!best) return null;
-
-    let allTiles = [...h]; gangs.forEach(g => allTiles.push(g.tile));
-    const suitC = new Set(allTiles.filter(t => ['MAN','TONG','TIAO'].includes(t.type)).map(t => t.type)).size;
-    const hasWord = allTiles.some(t => ['WIND','DRAGON'].includes(t.type));
-    if ((best.mianzi.filter(x => x.type === 'ke').length + gangs.length) === 4) taiList.push({ name: "對對胡", tai: 4 });
-    if (suitC === 1 && !hasWord) taiList.push({ name: "清一色", tai: 8 });
-    else if (suitC === 1 && hasWord) taiList.push({ name: "混一色", tai: 4 });
-    return taiList;
-}
-
-function findMianzi(counts, structures) {
-    let keys = Object.keys(counts).filter(k => counts[k] > 0).sort();
-    if (keys.length === 0) return true;
-    let first = keys[0];
-    if (counts[first] >= 3) {
-        counts[first] -= 3; structures.push({ type: 'ke' });
-        if (findMianzi(counts, structures)) return true;
-        structures.pop(); counts[first] += 3;
-    }
-    if (first.match(/MAN|TONG|TIAO/)) {
-        let type = first.match(/MAN|TONG|TIAO/)[0], val = parseInt(first.replace(type, ''));
-        let k2 = type + (val+1), k3 = type + (val+2);
-        if (val <= 7 && counts[k2] > 0 && counts[k3] > 0) {
-            counts[first]--; counts[k2]--; counts[k3]--; structures.push({ type: 'shun' });
-            if (findMianzi(counts, structures)) return true;
-            structures.pop(); counts[first]++; counts[k2]++; counts[k3]++;
-        }
-    }
-    return false;
-}
-
-function draw() {
-    ctx.clearRect(0, 0, GW, GH);
-    ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(0, 0, GW, 220);
-    ctx.font = "bold 36px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#fff";
-    ctx.fillText(`第 ${gameCount + 1} 局 | ${roundWind}圈 ${seatWind}門`, 360, 60);
-    
-    if (isTenpai) {
-        ctx.fillStyle = "#0f0"; ctx.fillText(`聽牌中: FREE MOVES`, 180, 130);
-    } else {
-        ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
+        fillPool();
+        gameStatus = 'PLAYING';
     }
 
-    ctx.fillStyle = "#fc0"; ctx.fillText(`時間: ${Math.ceil(timeLeft)}s`, 540, 130);
-    ctx.fillText(`總分: ${totalScore.toLocaleString()}`, 360, 190);
-    
-    flowersWon.forEach((f, i) => drawTile(60 + i*55, 280, f.txt, '#f57c00', 50, 70, false, 28));
-    
-    // 繪製槓牌 (放在花牌旁邊或下面)
-    gangsWon.forEach((g, i) => {
-         // 稍微錯開位置顯示
-         drawTile(GW - 80 - i*60, 280, g.txt, '#8e24aa', 55, 75, false, 30, true);
-    });
-    
-    // 繪製牌池
-    pool.forEach((p, i) => {
-        drawTile(p.x, p.y, p.txt, getCol(p.type), 110, 150, i === selectedPoolIndex, 65);
-    });
-    
-    ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 950, GW, 330);
-    hand.forEach((t, i) => {
-        let isFocus = i === selectedHandIndex;
-        let showGlow = isTenpai && richiPad[i];
-        
-        // 槓牌選擇模式下的高亮
-        if (isGangSelecting) {
-            let key = t.type + (t.val || t.txt);
-            if (gangCandidates.includes(key)) showGlow = true;
-        }
-
-        drawTile(t.x, t.y - (isFocus?45:0), t.txt, getCol(t.type), 92, 132, isFocus, null, showGlow);
-    });
-
-    // --- 繪製槓牌按鈕 ---
-    if (gangCandidates.length > 0 && gameStatus === 'PLAYING' && !winPending) {
-        let btnX = 580, btnY = 880, btnW = 120, btnH = 60;
-        
-        ctx.save();
-        ctx.fillStyle = isGangSelecting ? "#f57f17" : "#ffca28"; 
-        ctx.shadowBlur = 10; ctx.shadowColor = "rgba(0,0,0,0.5)";
-        ctx.beginPath(); ctx.roundRect(btnX, btnY, btnW, btnH, 10); ctx.fill();
-        
-        ctx.fillStyle = "#3e2723";
-        ctx.font = "bold 32px Arial";
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(isGangSelecting ? "選牌" : "槓 !", btnX + btnW/2, btnY + btnH/2);
-        ctx.restore();
+    function createDeck() {
+        let d = [];
+        ['MAN', 'TONG', 'TIAO'].forEach(type => {
+            for (let i = 1; i <= 9; i++) for (let n = 0; n < 4; n++) d.push({ type, val: i, txt: TILES_DATA[type][i-1] });
+        });
+        ['WIND', 'DRAGON'].forEach(type => TILES_DATA[type].forEach(txt => {
+            for (let n = 0; n < 4; n++) d.push({ type, txt, val: null });
+        }));
+        return d.sort(() => Math.random() - 0.5);
     }
-    // -----------------
 
-    if (winPending) { ctx.fillStyle = "#fc0"; ctx.font = "bold 120px Arial"; ctx.fillText("榮 和 !", 360, 640); }
-    if (gameStatus === 'WIN_ANIM') drawWinOverlay();
-    if (gameStatus === 'START_SCREEN') drawOverlay("拾肆雀：Arcade Plus", "開始挑戰", "#fc0");
-    if (gameStatus === 'FAIL') drawOverlay("挑戰失敗", "重新開始", "#f44");
-}
-
-function triggerWin(results) {
-    const sumTai = results.reduce((a, b) => a + b.tai, 0);
-    const earned = (sumTai + Math.floor(timeLeft) + movesLeft) * 100;
-    totalScore += earned; 
-    winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, scale: 0, thisWinTotal: earned };
-    gameStatus = 'WIN_ANIM'; playTone(880, 0.2);
-}
-
-function handleInput(e) {
-    const rect = canvas.getBoundingClientRect();
-    const scale = canvas.width / GW;
-    const mx = ((e.touches ? e.touches[0].clientX : e.clientX) - rect.left) / scale;
-    const my = ((e.touches ? e.touches[0].clientY : e.clientY) - rect.top) / scale;
-    
-    if (gameStatus === 'START_SCREEN' || gameStatus === 'FAIL') return resetAndStart(true);
-    if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
-    if (gameStatus !== 'PLAYING' || winPending) return;
-
-    // --- 檢測槓牌按鈕 ---
-    if (gangCandidates.length > 0) {
-        let btnX = 580, btnY = 880, btnW = 120, btnH = 60;
-        if (mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH) {
-            handleGangClick();
-            return;
+    function fillPool() {
+        pool = [];
+        while(pool.length < 9 && deck.length > 0) {
+            let t = deck.pop();
+            t.x = GW/2; t.y = GH/2;
+            let i = pool.length;
+            t.targetX = 230 + (i % 3) * 130;
+            t.targetY = 480 + Math.floor(i / 3) * 145;
+            pool.push(t);
         }
     }
 
-    let clickedHandIndex = -1;
-    hand.forEach((t, i) => { 
-        if (Math.abs(mx - t.x) < 45 && Math.abs(my - t.y) < 65) clickedHandIndex = i;
-    });
+    // ==========================================
+    // 判定邏輯
+    // ==========================================
 
-    if (clickedHandIndex !== -1) {
-        // A. 槓牌選擇模式
-        if (isGangSelecting) {
-            let t = hand[clickedHandIndex];
-            let key = t.type + (t.val || t.txt);
-            if (gangCandidates.includes(key)) {
-                performGang(key); 
-            } else {
-                isGangSelecting = false; 
-                playTone(200, 0.1); 
+    function calculateTotalFan(h) {
+        if (h.length !== 14) return null;
+        let fanList = [];
+        const counts = {}; 
+        h.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
+
+        if (checkThirteenOrphans(counts)) return [{ name: "十三么", fan: 13 }];
+
+        let best = null;
+        for (let key in counts) {
+            if (counts[key] >= 2) {
+                let tc = {...counts}; tc[key] -= 2;
+                let m = [];
+                if (findMianzi(tc, m)) { best = { jiang: key, mianzi: m }; break; }
             }
-            return; 
         }
+        if (!best) return null;
 
-        // B. 正常換牌模式
-        if (selectedPoolIndex !== -1) performSwap(clickedHandIndex, selectedPoolIndex); 
-        else { selectedHandIndex = (selectedHandIndex===clickedHandIndex)?-1:clickedHandIndex; playTone(659,0.05); }
-        return;
+        const mianzi = best.mianzi;
+        const keziCount = mianzi.filter(x => x.type === 'ke').length;
+        if (checkBigThree(mianzi)) fanList.push({ name: "大三元", fan: 8 });
+        else if (checkSmallThree(mianzi, best.jiang)) fanList.push({ name: "小三元", fan: 5 });
+        if (keziCount === 4) fanList.push({ name: "對對胡", fan: 3 });
+        const pureStatus = checkPureSuit(h);
+        if (pureStatus === 'PURE') fanList.push({ name: "清一色", fan: 7 });
+        else if (pureStatus === 'MIXED') fanList.push({ name: "混一色", fan: 3 });
+
+        if (fanList.length === 0) fanList.push({ name: "雞胡", fan: 1 });
+        if (isRichi) fanList.push({ name: "報聽獎勵", fan: 1 });
+
+        return fanList;
     }
 
-    // 牌池操作 (若在選槓則禁用)
-    if (!isGangSelecting) {
-        pool.forEach((p, i) => { 
-            if (Math.abs(mx - p.x) < 55 && Math.abs(my - p.y) < 75) {
-                if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i); 
-                else { selectedPoolIndex = (selectedPoolIndex===i)?-1:i; playTone(523,0.05); }
+    function findMianzi(counts, m) {
+        let keys = Object.keys(counts).filter(k => counts[k] > 0).sort();
+        if (keys.length === 0) return true;
+        let f = keys[0];
+        if (counts[f] >= 3) {
+            counts[f] -= 3; m.push({ type: 'ke', tile: f });
+            if (findMianzi(counts, m)) return true;
+            m.pop(); counts[f] += 3;
+        }
+        if (f.match(/MAN|TONG|TIAO/)) {
+            let type = f.match(/MAN|TONG|TIAO/)[0], val = parseInt(f.replace(type, ''));
+            let k2 = type + (val+1), k3 = type + (val+2);
+            if (val <= 7 && counts[k2] > 0 && counts[k3] > 0) {
+                counts[f]--; counts[k2]--; counts[k3]--;
+                m.push({ type: 'shun', tile: f });
+                if (findMianzi(counts, m)) return true;
+                m.pop(); counts[f]++; counts[k2]++; counts[k3]++;
+            }
+        }
+        return false;
+    }
+
+    function checkThirteenOrphans(counts) {
+        const orphans = ['MAN1','MAN9','TONG1','TONG9','TIAO1','TIAO9','WIND🀀','WIND🀁','WIND🀂','WIND🀃','DRAGON🀄','DRAGON🀅','DRAGON🀆'];
+        return orphans.every(o => counts[o] >= 1) && Object.keys(counts).length === 13;
+    }
+
+    function checkPureSuit(h) {
+        const suits = new Set(h.filter(t => ['MAN','TONG','TIAO'].includes(t.type)).map(t => t.type));
+        const hasWord = h.some(t => ['WIND','DRAGON'].includes(t.type));
+        if (suits.size === 1 && !hasWord) return 'PURE';
+        if (suits.size === 1 && hasWord) return 'MIXED';
+        return 'NONE';
+    }
+
+    function checkBigThree(m) { return m.filter(x => x.type === 'ke' && x.tile.includes('DRAGON')).length === 3; }
+    function checkSmallThree(m, j) { return m.filter(x => x.type === 'ke' && x.tile.includes('DRAGON')).length === 2 && j.includes('DRAGON'); }
+
+    // ==========================================
+    // 渲染與操作
+    // ==========================================
+
+    function draw() {
+        ctx.clearRect(0, 0, GW, GH);
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, 0, GW, 200);
+        ctx.fillStyle = "#fff"; ctx.font = "bold 40px Arial"; ctx.textAlign = "center";
+        ctx.fillText(`拾八雀：正統 13張版`, 360, 60);
+        ctx.fillStyle = movesLeft <= 2 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
+        ctx.fillStyle = "#fc0"; ctx.fillText(`限時: ${Math.ceil(timeLeft)}s`, 540, 130);
+        
+        // 提示字
+        ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.font = "24px Arial";
+        ctx.fillText(isRichi ? "報聽中：自動尋找胡牌..." : hintMessage, 360, 180);
+
+        pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
+
+        if (gameStatus === 'PLAYING') {
+            ctx.fillStyle = (deck.length > 0 && !isRichi) ? "#e64a19" : "#444";
+            ctx.beginPath(); ctx.roundRect(50, 880, 240, 80, 15); ctx.fill();
+            ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; ctx.fillText("更換牌池", 170, 930);
+
+            ctx.fillStyle = isRichi ? "#555" : (selectedHandIndex !== -1 ? "#d32f2f" : "#666");
+            ctx.beginPath(); ctx.roundRect(310, 880, 360, 80, 15); ctx.fill();
+            ctx.fillStyle = "#fff"; ctx.fillText(isRichi ? "已報聽" : "報聽 (+1番)", 490, 930);
+        }
+
+        ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0, 960, GW, 320);
+        hand.forEach((t, i) => {
+            let isS = (i === selectedHandIndex);
+            drawTile(t.x, t.y - (isS ? 40 : 0), t.txt, getCol(t.type), 88, 125, isS, isRichi);
+        });
+
+        if (gameStatus === 'WIN_ANIM') drawWinOverlay();
+        if (gameStatus === 'START_SCREEN') drawOverlay("拾八雀", "開始遊戲", "#fc0");
+        if (gameStatus === 'FAIL') drawOverlay("殘念", "重新挑戰", "#f44");
+    }
+
+    function drawWinOverlay() {
+        ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
+        ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
+        ctx.fillStyle = "#fc0"; ctx.font = "bold 90px Arial"; ctx.fillText(`${winInfo.totalFan} 番!`, 0, -120);
+        ctx.font = "35px Arial"; ctx.fillStyle = "#fff";
+        winInfo.names.forEach((n, i) => ctx.fillText(n, 0, i * 50));
+        ctx.fillStyle = "#0f0"; ctx.fillText(`步數回補 +${winInfo.totalFan}`, 0, 250);
+        ctx.restore();
+        if(winInfo.scale < 1) winInfo.scale += 0.05;
+    }
+
+    function drawTile(x, y, txt, color, w, h, isS, isL) {
+        ctx.save(); ctx.translate(x, y);
+        ctx.fillStyle = isL ? "#ddd" : "#fff"; 
+        ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
+        ctx.strokeStyle = isS ? "#fc0" : (isL ? "#999" : "#bbb"); ctx.lineWidth = isS?6:2; ctx.stroke();
+        ctx.fillStyle = isL ? "#666" : color; ctx.font = `bold ${w*0.75}px Arial`; ctx.textAlign="center"; ctx.textBaseline="middle";
+        ctx.fillText(txt||'?', 0, 5); ctx.restore();
+    }
+
+    function drawOverlay(t, b, c) {
+        ctx.fillStyle = "rgba(0,0,0,0.9)"; ctx.fillRect(0, 0, GW, GH);
+        ctx.fillStyle = "#fff"; ctx.font = "bold 80px Arial"; ctx.textAlign = "center"; ctx.fillText(t, 360, 500);
+        ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect(200, 600, 320, 120, 20); ctx.fill();
+        ctx.fillStyle = "#000"; ctx.font = "bold 50px Arial"; ctx.fillText(b, 360, 675);
+    }
+
+    function getCol(t) { return t==='MAN'?'#d32f2f':t==='TONG'?'#1976d2':t==='TIAO'?'#2e7d32':'#4a148c'; }
+
+    function sortHand() {
+        if(isRichi) return; // 報聽後不排序，維持聽牌陣型
+        const order = {'MAN':0, 'TONG':1, 'TIAO':2, 'WIND':3, 'DRAGON':4};
+        hand.sort((a,b) => order[a.type] - order[b.type] || (a.val || a.txt).toString().localeCompare((b.val || b.txt).toString()));
+    }
+
+    function handleInput(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scale = canvas.width / GW;
+        const mx = ((e.touches ? e.touches[0].clientX : e.clientX) - rect.left) / scale;
+        const my = ((e.touches ? e.touches[0].clientY : e.clientY) - rect.top) / scale;
+
+        if (gameStatus === 'START_SCREEN' || gameStatus === 'FAIL') return resetAndStart(true);
+        if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
+        if (gameStatus !== 'PLAYING') return;
+
+        if (my > 880 && my < 960) {
+            if (mx > 50 && mx < 290 && deck.length > 0 && !isRichi) return fillPool();
+            // 報聽邏輯：必須先選一張手牌
+            if (mx > 310 && mx < 670 && !isRichi) {
+                if (selectedHandIndex !== -1) {
+                    isRichi = true;
+                    performSwap(selectedHandIndex, 0); // 打出選中的牌，進入自動模式
+                    playTone(1200, 0.5);
+                } else {
+                    hintMessage = "⚠️ 請先點選一張廢牌再報聽！";
+                    playTone(200, 0.2);
+                }
+                return;
+            }
+        }
+
+        if (isRichi) return;
+
+        hand.forEach((t, i) => {
+            let tx = 88 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
+            if (Math.abs(mx - tx) < 45 && Math.abs(my - ty) < 65) {
+                if (selectedPoolIndex !== -1) performSwap(i, selectedPoolIndex);
+                else { selectedHandIndex = (selectedHandIndex===i) ? -1 : i; playTone(600, 0.05); }
+            }
+        });
+
+        pool.forEach((p, i) => {
+            if (Math.abs(mx - p.x) < 60 && Math.abs(my - p.y) < 80) {
+                if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i);
+                else { selectedPoolIndex = (selectedPoolIndex===i) ? -1 : i; playTone(500, 0.05); }
             }
         });
     }
-}
 
-function update() {
-    const now = Date.now(), dt = (now - lastTimestamp) / 1000; lastTimestamp = now;
-    glowValue = (Math.sin(now / 150) + 1) / 2; 
+    async function performSwap(hIdx, pIdx) {
+        const pTile = { ...pool[pIdx] };
+        let tempHand = [...hand]; tempHand[hIdx] = pTile;
+        let res = calculateTotalFan(tempHand);
+        
+        hand[hIdx] = pTile; pool.splice(pIdx, 1);
+        selectedHandIndex = -1; selectedPoolIndex = -1;
+        sortHand();
 
-    // 持續檢查槓牌狀態
-    if (gameStatus === 'PLAYING') checkGangStatus();
-
-    if (gameStatus === 'PLAYING' && !winPending) {
-        timeLeft -= dt; if (timeLeft <= 0) gameStatus = 'FAIL';
+        if (res) {
+            const sum = res.reduce((a, b) => a + b.fan, 0);
+            winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0 };
+            movesLeft += sum; gameStatus = 'WIN_ANIM'; playTone(880, 0.5);
+        } else {
+            if (!isRichi) { movesLeft--; playTone(400, 0.1); } // 報聽自動模式不扣步數
+            if (movesLeft <= 0) gameStatus = 'FAIL';
+            else if (pool.length === 0) fillPool();
+        }
     }
-    pool.forEach(p => { p.x += (p.targetX - p.x) * 0.15; p.y += (p.targetY - p.y) * 0.15; });
-    hand.forEach((t, i) => { 
-        let tx = 85 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
-        if(!isNaN(t.x)) t.x += (tx - t.x) * 0.18; else t.x = tx;
-        if(!isNaN(t.y)) t.y += (ty - t.y) * 0.18; else t.y = ty;
-    });
-}
 
-function createDeck() {
-    let d = [];
-    ['MAN', 'TONG', 'TIAO'].forEach(type => { for (let i = 1; i <= 9; i++) for (let n = 0; n < 4; n++) d.push({ type, val: i, txt: TILES_DATA[type][i-1] }); });
-    ['WIND', 'DRAGON'].forEach(type => TILES_DATA[type].forEach(txt => { for (let n = 0; n < 4; n++) d.push({ type, txt: txt, val: null }); }));
-    TILES_DATA['FLOWER'].forEach(txt => d.push({ type: 'FLOWER', txt, val: null }));
-    return d.sort(() => Math.random() - 0.5);
-}
-
-function sortHand() {
-    const order = {'MAN':0, 'TONG':1, 'TIAO':2, 'WIND':3, 'DRAGON':4, 'FLOWER':5};
-    hand.sort((a,b) => order[a.type] - order[b.type] || (a.val || a.txt).toString().localeCompare((b.val || b.txt).toString()));
-}
-function getCol(t) { return t==='MAN'?'#d32f2f':t==='TONG'?'#1976d2':t==='TIAO'?'#2e7d32':'#4a148c'; }
-function drawTile(x, y, txt, color, w, h, isS, fs, isG = false) {
-    ctx.save(); ctx.translate(x, y);
-    if (isG) { ctx.shadowBlur = 15; ctx.shadowColor = "#0f0"; ctx.strokeStyle = "#0f0"; ctx.lineWidth = 4; ctx.strokeRect(-w/2, -h/2, w, h); }
-    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
-    ctx.strokeStyle = isS ? "#fc0" : "#bbb"; ctx.lineWidth = isS?4:2; ctx.stroke();
-    ctx.fillStyle = color; ctx.font = `bold ${fs || w*0.7}px Arial`; ctx.textAlign="center"; ctx.textBaseline="middle"; 
-    ctx.fillText(txt||'?', 0, 0); ctx.restore();
-}
-function drawWinOverlay() {
-    ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
-    ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
-    ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.textAlign="center";
-    ctx.fillText(`${winInfo.totalTai} 台!`, 0, -200);
-    ctx.font = "32px Arial"; ctx.fillStyle = "#fff";
-    winInfo.names.forEach((n, i) => ctx.fillText(n, 0, -100 + i * 40));
-    ctx.font = "40px Arial"; ctx.fillStyle = "#0f0";
-    ctx.fillText(`得分：+${winInfo.thisWinTotal.toLocaleString()}`, 0, 150);
-    ctx.fillStyle = "#aaa"; ctx.font = "24px Arial"; ctx.fillText("點擊繼續下一局", 0, 250); ctx.restore();
-    if(winInfo.scale < 1) winInfo.scale += 0.05;
-}
-function drawOverlay(t, b, c) {
-    ctx.fillStyle = "rgba(0,0,0,0.9)"; ctx.fillRect(0, 0, GW, GH);
-    ctx.fillStyle = "#fff"; ctx.font = "bold 80px Arial"; ctx.textAlign = "center"; ctx.fillText(t, 360, 500);
-    ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect(200, 600, 320, 120, 20); ctx.fill();
-    ctx.fillStyle = "#000"; ctx.font = "bold 50px Arial"; ctx.fillText(b, 360, 675);
-}
-function loop() { update(); draw(); requestAnimationFrame(loop); }
-init();
+    function loop() {
+        const now = Date.now(), dt = (now - lastTimestamp) / 1000;
+        lastTimestamp = now;
+        if (gameStatus === 'PLAYING') {
+            timeLeft -= dt;
+            if (timeLeft <= 0 || movesLeft <= 0) gameStatus = 'FAIL';
+            if (isRichi) {
+                richiAutoTimer += dt;
+                // 報聽自動尋找模式
+                if (richiAutoTimer > 0.8) {
+                    richiAutoTimer = 0;
+                    fillPool(); // 摸新牌
+                    // 掃描牌池是否有胡
+                    for(let i=0; i<pool.length; i++) {
+                        let testHand = [...hand];
+                        testHand[13] = pool[i]; // 測試最後換入的位置
+                        if(calculateTotalFan(testHand)) {
+                            performSwap(13, i);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        pool.forEach(p => { p.x += (p.targetX - p.x) * 0.15; p.y += (p.targetY - p.y) * 0.15; });
+        hand.forEach((t, i) => { 
+            let tx = 88 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
+            t.x += (tx - t.x) * 0.18; t.y += (ty - t.y) * 0.18;
+        });
+        draw();
+        requestAnimationFrame(loop);
+    }
+    init();
 </script>
 </body>
 </html>
