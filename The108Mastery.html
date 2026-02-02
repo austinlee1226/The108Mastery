@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Pixel JD - 拾八雀：13張生存挑戰版</title>
+    <title>Pixel JD - 拾八雀：13張智能流局版</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -111,20 +111,42 @@
             t.targetY = 480 + Math.floor(i / 3) * 145;
             pool.push(t);
         }
+        // 每次填充完牌池，如果是牌庫最後一批，檢查是否流局
+        if (deck.length === 0) checkFinalPossibility();
     }
 
     // ==========================================
-    // 判定邏輯 (13張胡牌14張)
+    // 流局智能判定
     // ==========================================
+    function checkFinalPossibility() {
+        if (deck.length > 0) return; // 牌庫還有牌，不需要判斷
+        
+        let canWin = false;
+        // 模擬牌池中的每一張牌
+        for (let pTile of pool) {
+            // 嘗試換入到手牌中的每一個位置
+            for (let i = 0; i < hand.length; i++) {
+                let tempHand = JSON.parse(JSON.stringify(hand));
+                tempHand[i] = pTile;
+                if (calculateTotalFan(tempHand)) {
+                    canWin = true;
+                    break;
+                }
+            }
+            if (canWin) break;
+        }
+
+        if (!canWin) {
+            triggerDrawGame("牌池無解，確定流局");
+        }
+    }
 
     function calculateTotalFan(h) {
         if (h.length !== 14) return null;
         let fanList = [];
         const counts = {}; 
         h.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
-
         if (checkThirteenOrphans(counts)) return [{ name: "十三么", fan: 13 }];
-
         let best = null;
         for (let key in counts) {
             if (counts[key] >= 2) {
@@ -134,7 +156,6 @@
             }
         }
         if (!best) return null;
-
         const mianzi = best.mianzi;
         const keziCount = mianzi.filter(x => x.type === 'ke').length;
         if (checkBigThree(mianzi)) fanList.push({ name: "大三元", fan: 8 });
@@ -143,7 +164,6 @@
         const pureStatus = checkPureSuit(h);
         if (pureStatus === 'PURE') fanList.push({ name: "清一色", fan: 7 });
         else if (pureStatus === 'MIXED') fanList.push({ name: "混一色", fan: 3 });
-
         if (fanList.length === 0) fanList.push({ name: "雞胡", fan: 1 });
         return fanList;
     }
@@ -187,29 +207,25 @@
     function checkSmallThree(m, j) { return m.filter(x => x.type === 'ke' && x.tile.includes('DRAGON')).length === 2 && j.includes('DRAGON'); }
 
     // ==========================================
-    // 渲染與操作
+    // 渲染與更新
     // ==========================================
 
     function draw() {
         ctx.clearRect(0, 0, GW, GH);
-        // Top UI
         ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, 0, GW, 180);
         ctx.fillStyle = "#fff"; ctx.font = "bold 40px Arial"; ctx.textAlign = "center";
         ctx.fillText(`拾八雀：13張生存挑戰`, 360, 60);
         ctx.fillStyle = movesLeft <= 2 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
         ctx.fillStyle = "#fc0"; ctx.fillText(`限時: ${Math.ceil(timeLeft)}s`, 540, 130);
 
-        // Pool
         pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
 
-        // Buttons
         if (gameStatus === 'PLAYING') {
             ctx.fillStyle = (deck.length > 0) ? "#e64a19" : "#444";
             ctx.beginPath(); ctx.roundRect(GW/2 - 120, 880, 240, 80, 15); ctx.fill();
             ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; ctx.fillText(deck.length > 0 ? "更換牌池" : "牌庫已空", GW/2, 930);
         }
 
-        // Hand
         ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0, 960, GW, 320);
         hand.forEach((t, i) => {
             let isS = (i === selectedHandIndex);
@@ -224,7 +240,6 @@
     function drawResultOverlay() {
         ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
         ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
-        
         if (winInfo.isDraw) {
             ctx.fillStyle = "#aaa"; ctx.font = "bold 90px Arial"; ctx.fillText(`流 局`, 0, -100);
             ctx.font = "30px Arial"; ctx.fillStyle = "#f44";
@@ -271,7 +286,6 @@
         if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
         if (gameStatus !== 'PLAYING') return;
 
-        // 更換牌池按鈕
         if (my > 880 && my < 960 && mx > GW/2 - 120 && mx < GW/2 + 120) {
             if (deck.length > 0) fillPool();
             return;
@@ -310,23 +324,19 @@
         } else {
             movesLeft--; playTone(400, 0.1);
             if (movesLeft <= 0) gameStatus = 'FAIL';
-            else if (pool.length === 0) {
-                if (deck.length > 0) fillPool();
-                else triggerDrawGame(); // 牌庫跟牌池都空了，觸發流局
-            }
+            else if (deck.length === 0) checkFinalPossibility(); 
+            else if (pool.length === 0) fillPool();
         }
     }
 
-    function triggerDrawGame() {
+    function triggerDrawGame(reason) {
         const isPenalized = swapCount < 3;
         if (isPenalized) movesLeft = Math.max(0, movesLeft - 3);
-        
         winInfo = { 
-            names: isPenalized ? ["換牌不足3次", "消極比賽處罰 -3步"] : ["可惜！牌庫已用盡"], 
+            names: isPenalized ? ["換牌不足3次", "消極比賽處罰 -3步"] : [reason], 
             totalFan: 0, scale: 0, isDraw: true 
         };
-        gameStatus = 'WIN_ANIM';
-        playTone(200, 0.8);
+        gameStatus = 'WIN_ANIM'; playTone(200, 0.8);
         if (movesLeft <= 0 && isPenalized) gameStatus = 'FAIL';
     }
 
