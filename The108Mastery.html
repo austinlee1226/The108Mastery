@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Pixel JD - 拾八雀：手機音效修正版</title>
+    <title>Pixel JD - 拾肆雀</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -28,27 +28,40 @@
         'DRAGON': ['🀄','🀅','🀆']
     };
 
-    let audioCtx = null; // 全域音訊上下文
-    let gameStatus = 'START_SCREEN', totalScore = 0, movesLeft = 12, timeLeft = 60, initialTime = 60;
-    let gameCount = 0, winStreak = 0, lastTickTime = 0;
+    let audioCtx = null;
+    let gameStatus = 'MENU', totalScore = 0, movesLeft = 12, timeLeft = 60, initialTime = 60;
+    let gameCount = 0, winStreak = 0, lastTickTime = 0, lastGainedScore = 0;
     let roundWindIdx = 0, seatWindIdx = 0;
     let hand = [], pool = [], deck = [];
     let selectedHandIndex = -1, selectedPoolIndex = -1;
     let lastTimestamp = 0, swapCount = 0;
-    let winInfo = { names: [], totalFan: 0, scale: 0, isDraw: false };
+    let winInfo = { names: [], totalFan: 0, scale: 0, isDraw: false, details: [] };
 
-    // --- 手機音效啟動邏輯 ---
+    // 玩家與排行榜資料
+    let playerName = localStorage.getItem('pixel_jd_player_name') || "";
+    let leaderBoard = JSON.parse(localStorage.getItem('pixel_jd_mahjong_rank')) || [];
+
+    function saveScore(score, rounds) {
+        // 如果還沒有名字，要求輸入
+        if (!playerName) {
+            let input = prompt("恭喜完成挑戰！請輸入你的大名：", "雞丁");
+            playerName = input || "無名氏";
+            localStorage.setItem('pixel_jd_player_name', playerName);
+        }
+        
+        leaderBoard.push({ name: playerName, score, rounds });
+        leaderBoard.sort((a, b) => b.score - a.score);
+        leaderBoard = leaderBoard.slice(0, 5);
+        localStorage.setItem('pixel_jd_mahjong_rank', JSON.stringify(leaderBoard));
+    }
+
     function unlockAudio() {
-        if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        if (audioCtx.state === 'suspended') {
-            audioCtx.resume();
-        }
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
     }
 
     function playTone(freq, dur, vol = 0.3) {
-        if (!audioCtx) return; // 若未啟動則不發聲，避免報錯
+        if (!audioCtx) return;
         const osc = audioCtx.createOscillator();
         const g = audioCtx.createGain();
         osc.type = 'sine';
@@ -62,10 +75,7 @@
     function init() {
         resize();
         window.addEventListener('resize', resize);
-        canvas.addEventListener('pointerdown', (e) => {
-            unlockAudio(); // 玩家只要碰到螢幕就嘗試啟動 Audio
-            handleInput(e);
-        });
+        canvas.addEventListener('pointerdown', handleInput);
         lastTimestamp = Date.now();
         requestAnimationFrame(loop);
     }
@@ -77,6 +87,8 @@
     }
 
     async function resetAndStart(isFullReset) {
+        unlockAudio();
+        hand = []; pool = []; deck = [];
         if(isFullReset) { 
             totalScore = 0; movesLeft = 12; gameCount = 0; winStreak = 0;
             roundWindIdx = 0; seatWindIdx = 0;
@@ -86,12 +98,8 @@
             roundWindIdx = Math.floor(gameCount / 4) % 4;
         }
         
-        if (gameCount < 5) initialTime = 60;
-        else if (gameCount < 15) initialTime = 60 - (Math.floor(gameCount / 5) * 5);
-        else initialTime = Math.max(30, 50 - (Math.floor(gameCount / 10) * 5));
-        
-        timeLeft = initialTime;
-        lastTickTime = initialTime; 
+        initialTime = (gameCount < 5) ? 60 : (gameCount < 15 ? 60 - (Math.floor(gameCount / 5) * 5) : Math.max(30, 50 - (Math.floor(gameCount / 10) * 5)));
+        timeLeft = initialTime; lastTickTime = initialTime; 
         selectedHandIndex = -1; selectedPoolIndex = -1; swapCount = 0;
         gameStatus = 'DEALING';
         
@@ -99,17 +107,18 @@
         let suitTiles = fullDeck.filter(t => ['MAN', 'TONG', 'TIAO'].includes(t.type));
         let wordTiles = fullDeck.filter(t => ['WIND', 'DRAGON'].includes(t.type));
         let wordCountForHand = Math.floor(Math.random() * 4) + 2; 
-        hand = [];
-        for(let i = 0; i < wordCountForHand; i++) hand.push(wordTiles.pop());
-        while(hand.length < 14) hand.push(suitTiles.pop());
+        
+        let tempHand = [];
+        for(let i = 0; i < wordCountForHand; i++) tempHand.push(wordTiles.pop());
+        while(tempHand.length < 14) tempHand.push(suitTiles.pop());
         deck = [...suitTiles, ...wordTiles].sort(() => Math.random() - 0.5);
         
         for(let i = 0; i < 14; i++) {
-            let t = hand[i]; t.x = 800; t.y = 1100;
-            if (i < 13) { playTone(500 + (i * 30), 0.08, 0.2); await new Promise(r => setTimeout(r, 60)); }
+            let t = tempHand[i]; t.x = GW + 100; t.y = 1080 + Math.floor(i / 7) * 145; hand.push(t);
+            if (i < 13) { playTone(500 + (i * 30), 0.08, 0.2); await new Promise(r => setTimeout(r, 100)); }
             else { playTone(800, 0.15, 0.4); }
         }
-        sortHand(); fillPool(); gameStatus = 'PLAYING';
+        setTimeout(() => { sortHand(); fillPool(); gameStatus = 'PLAYING'; }, 500);
     }
 
     function createDeck() {
@@ -127,7 +136,7 @@
         if (deck.length === 0) return; 
         pool = [];
         while(pool.length < 9 && deck.length > 0) {
-            let t = deck.pop(); t.x = GW/2; t.y = GH/2;
+            let t = deck.pop(); t.x = GW/2; t.y = GH/2; 
             let i = pool.length;
             t.targetX = 230 + (i % 3) * 130; t.targetY = 480 + Math.floor(i / 3) * 145;
             pool.push(t);
@@ -146,7 +155,10 @@
             }
             if (canWin) break;
         }
-        if (!canWin) triggerDrawGame("牌池無解，自動流局");
+        if (!canWin) {
+            gameStatus = 'WAITING_DRAW';
+            setTimeout(() => { triggerDrawGame("牌池無解，自動流局"); }, 2000);
+        }
     }
 
     function calculateTotalFan(h) {
@@ -154,9 +166,8 @@
         let fanList = [];
         const counts = {}; 
         h.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
-        if (checkThirteenOrphans(counts)) return [{ name: "十三么", fan: 13 }];
-        const hasSuit = h.some(t => ['MAN','TONG','TIAO'].includes(t.type));
-        if (!hasSuit) return [{ name: "字一色", fan: 13 }];
+        if (checkThirteenOrphans(counts)) return [{ name: "十三麼", fan: 13 }];
+        if (!h.some(t => ['MAN','TONG','TIAO'].includes(t.type))) return [{ name: "字一色", fan: 13 }];
         let best = null;
         for (let key in counts) {
             if (counts[key] >= 2) {
@@ -165,16 +176,15 @@
             }
         }
         if (!best) return null;
-        const mianzi = best.mianzi;
-        const kezi = mianzi.filter(x => x.type === 'ke');
+        const kezi = best.mianzi.filter(x => x.type === 'ke');
         if (checkChuuren(h)) return [{ name: "九蓮寶燈", fan: 13 }];
         const windsCount = kezi.filter(x => x.tile.startsWith('WIND')).length;
         if (windsCount === 4) fanList.push({ name: "大四喜", fan: 13 });
         else if (windsCount === 3 && best.jiang.startsWith('WIND')) fanList.push({ name: "小四喜", fan: 8 });
         const isAll19 = h.every(t => (t.val === 1 || t.val === 9) || ['WIND','DRAGON'].includes(t.type));
         if (isAll19 && kezi.length === 4) {
-            if (h.every(t => (t.val === 1 || t.val === 9))) fanList.push({ name: "清么九", fan: 10 });
-            else fanList.push({ name: "混么九", fan: 5 });
+            if (h.every(t => (t.val === 1 || t.val === 9))) fanList.push({ name: "清麼九", fan: 10 });
+            else fanList.push({ name: "混麼九", fan: 5 });
         }
         const dragonsCount = kezi.filter(x => x.tile.startsWith('DRAGON')).length;
         if (dragonsCount === 3) fanList.push({ name: "大三元", fan: 8 });
@@ -187,7 +197,7 @@
             if (k.tile === 'WIND' + WINDS[roundWindIdx]) fanList.push({ name: "圈風刻", fan: 1 });
             if (k.tile === 'WIND' + WINDS[seatWindIdx]) fanList.push({ name: "門風刻", fan: 1 });
             const val = parseInt(k.tile.replace(/[A-Z]/g, ''));
-            if (val === 1 || val === 9) fanList.push({ name: "么九刻", fan: 1 });
+            if (val === 1 || val === 9) fanList.push({ name: "麼九刻", fan: 1 });
         });
         if (fanList.length === 0) fanList.push({ name: "雞胡", fan: 1 });
         return fanList;
@@ -197,74 +207,115 @@
         let keys = Object.keys(counts).filter(k => counts[k] > 0).sort();
         if (keys.length === 0) return true;
         let f = keys[0];
-        if (counts[f] >= 3) {
-            counts[f] -= 3; m.push({ type: 'ke', tile: f });
-            if (findMianzi(counts, m)) return true;
-            m.pop(); counts[f] += 3;
-        }
+        if (counts[f] >= 3) { counts[f] -= 3; m.push({ type: 'ke', tile: f }); if (findMianzi(counts, m)) return true; m.pop(); counts[f] += 3; }
         if (f.match(/MAN|TONG|TIAO/)) {
             let type = f.match(/MAN|TONG|TIAO/)[0], val = parseInt(f.replace(type, ''));
             let k2 = type + (val+1), k3 = type + (val+2);
-            if (val <= 7 && counts[k2] > 0 && counts[k3] > 0) {
-                counts[f]--; counts[k2]--; counts[k3]--;
-                m.push({ type: 'shun', tile: f });
-                if (findMianzi(counts, m)) return true;
-                m.pop(); counts[f]++; counts[k2]++; counts[k3]++;
-            }
+            if (val <= 7 && counts[k2] > 0 && counts[k3] > 0) { counts[f]--; counts[k2]--; counts[k3]--; m.push({ type: 'shun', tile: f }); if (findMianzi(counts, m)) return true; m.pop(); counts[f]++; counts[k2]++; counts[k3]++; }
         }
         return false;
     }
 
-    function checkThirteenOrphans(counts) {
-        const orphans = ['MAN1','MAN9','TONG1','TONG9','TIAO1','TIAO9','WIND🀀','WIND🀁','WIND🀂','WIND🀃','DRAGON🀄','DRAGON🀅','DRAGON🀆'];
-        return orphans.every(o => counts[o] >= 1) && Object.keys(counts).length === 13;
-    }
-
-    function checkChuuren(h) {
-        const suits = new Set(h.map(t => t.type));
-        if (suits.size !== 1 || h.some(t => ['WIND','DRAGON'].includes(t.type))) return false;
-        const vals = h.map(t => t.val).sort((a,b)=>a-b);
-        const target = [1,1,1,2,3,4,5,6,7,8,9,9,9];
-        for(let v of target) { let idx = vals.indexOf(v); if(idx === -1) return false; vals.splice(idx, 1); }
-        return true;
-    }
-
-    function checkPureSuit(h) {
-        const suits = new Set(h.filter(t => ['MAN','TONG','TIAO'].includes(t.type)).map(t => t.type));
-        const hasWord = h.some(t => ['WIND','DRAGON'].includes(t.type));
-        if (suits.size === 1 && !hasWord) return 'PURE';
-        if (suits.size === 1 && hasWord) return 'MIXED';
-        return 'NONE';
-    }
+    function checkThirteenOrphans(counts) { const orphans = ['MAN1','MAN9','TONG1','TONG9','TIAO1','TIAO9','WIND🀀','WIND🀁','WIND🀂','WIND🀃','DRAGON🀄','DRAGON🀅','DRAGON🀆']; return orphans.every(o => counts[o] >= 1) && Object.keys(counts).length === 13; }
+    function checkChuuren(h) { const suits = new Set(h.map(t => t.type)); if (suits.size !== 1 || h.some(t => ['WIND','DRAGON'].includes(t.type))) return false; const vals = h.map(t => t.val).sort((a,b)=>a-b); const target = [1,1,1,2,3,4,5,6,7,8,9,9,9]; for(let v of target) { let idx = vals.indexOf(v); if(idx === -1) return false; vals.splice(idx, 1); } return true; }
+    function checkPureSuit(h) { const suits = new Set(h.filter(t => ['MAN','TONG','TIAO'].includes(t.type)).map(t => t.type)); const hasWord = h.some(t => ['WIND','DRAGON'].includes(t.type)); if (suits.size === 1 && !hasWord) return 'PURE'; if (suits.size === 1 && hasWord) return 'MIXED'; return 'NONE'; }
 
     function draw() {
         ctx.clearRect(0, 0, GW, GH);
-        ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0, 0, GW, 240);
-        ctx.fillStyle = "#fff"; ctx.font = "bold 42px Arial"; ctx.textAlign = "center";
-        ctx.fillText(`拾八雀：競技終極版`, 360, 60);
-        ctx.font = "bold 28px Arial"; ctx.fillStyle = "#aaa";
-        ctx.fillText(`${WINDS[roundWindIdx]}風圈 / 門風：${WINDS[seatWindIdx]}`, 360, 105);
-        ctx.font = "bold 32px Arial";
-        ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc";
-        ctx.fillText(`生命: ${movesLeft}`, 180, 160);
-        ctx.fillStyle = (timeLeft <= 10) ? "#f44" : "#fc0";
-        ctx.fillText(`限時: ${Math.ceil(timeLeft)}s`, 540, 160);
+        if (gameStatus === 'MENU') drawMenu();
+        else if (gameStatus === 'RULES') drawRules();
+        else if (gameStatus === 'RANK') drawRank();
+        else {
+            ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0, 0, GW, 280);
+            ctx.fillStyle = "#fff"; ctx.font = "bold 42px Arial"; ctx.textAlign = "center";
+            ctx.fillText(`拾肆雀：競技終極版`, 360, 60);
+            ctx.fillStyle = "#fc0"; ctx.font = "bold 36px Arial"; ctx.fillText(`總積分: ${totalScore.toLocaleString()}`, 360, 110);
+            ctx.font = "bold 28px Arial"; ctx.fillStyle = "#aaa";
+            ctx.fillText(`${WINDS[roundWindIdx]}風圈 / 門風：${WINDS[seatWindIdx]}`, 360, 155);
+            ctx.font = "bold 32px Arial";
+            ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`生命: ${movesLeft}`, 180, 210);
+            ctx.fillStyle = (timeLeft <= 10) ? "#f44" : "#fc0"; ctx.fillText(`限時: ${Math.ceil(timeLeft)}s`, 540, 210);
 
-        pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
+            pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
+            if (gameStatus === 'PLAYING' || gameStatus === 'WAITING_DRAW' || gameStatus === 'DEALING') {
+                ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.beginPath(); ctx.roundRect(140, 370, 180, 40, 10); ctx.fill();
+                ctx.fillStyle = "#fff"; ctx.font = "bold 24px Arial"; ctx.textAlign = "center"; ctx.fillText(`牌庫剩餘: ${deck.length}`, 230, 398);
+            }
+            if (gameStatus === 'PLAYING') {
+                ctx.fillStyle = (deck.length > 0) ? "#e64a19" : "#333";
+                ctx.beginPath(); ctx.roundRect(GW/2 - 150, 880, 300, 80, 15); ctx.fill();
+                ctx.fillStyle = "#fff"; ctx.font = "bold 32px Arial"; ctx.textAlign = "center"; ctx.fillText("更換牌池", GW/2, 932);
+            }
+            ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0, 970, GW, 310);
+            hand.forEach((t, i) => drawTile(t.x, t.y - (i === selectedHandIndex ? 40 : 0), t.txt, getCol(t.type), 88, 125, i === selectedHandIndex));
+            if (gameStatus === 'WIN_ANIM') drawResultOverlay();
+            if (gameStatus === 'FAIL') drawOverlay("生命耗盡", "回到首頁", "#f44");
+        }
+    }
 
-        if (gameStatus === 'PLAYING') {
-            ctx.fillStyle = (deck.length > 0) ? "#e64a19" : "#333";
-            ctx.beginPath(); ctx.roundRect(GW/2 - 150, 880, 300, 80, 15); ctx.fill();
-            ctx.fillStyle = "#fff"; ctx.font = "bold 32px Arial"; ctx.textAlign = "center";
-            ctx.fillText(deck.length > 0 ? "更換牌池" : "牌庫空了", GW/2, 932);
+    function drawMenu() {
+        ctx.fillStyle = "#fff"; ctx.font = "bold 110px Arial"; ctx.textAlign = "center";
+        ctx.fillText("拾肆雀", 360, 320);
+        ctx.font = "36px Arial"; ctx.fillStyle = "#aaa";
+        ctx.fillText("Pixel JD 榮譽出品", 360, 400);
+
+        if(playerName) {
+            ctx.fillStyle = "#0fc"; ctx.font = "bold 32px Arial";
+            ctx.fillText(`挑戰者: ${playerName}`, 360, 480);
         }
 
-        ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0, 970, GW, 310);
-        hand.forEach((t, i) => drawTile(t.x, t.y - (i === selectedHandIndex ? 40 : 0), t.txt, getCol(t.type), 88, 125, i === selectedHandIndex));
+        if(leaderBoard.length > 0) {
+            ctx.fillStyle = "#fc0"; ctx.font = "bold 42px Arial";
+            ctx.fillText(`最高分: ${leaderBoard[0].score.toLocaleString()}`, 360, 560);
+        }
+        
+        drawButton(360, 720, 350, 110, "#fc0", "遊戲開始");
+        drawButton(360, 860, 350, 110, "#0fc", "遊戲說明");
+        drawButton(360, 1000, 350, 110, "#f66", "排行榜");
+    }
 
-        if (gameStatus === 'WIN_ANIM') drawResultOverlay();
-        if (gameStatus === 'START_SCREEN') drawOverlay("Pixel JD 拾八雀", "開始遊戲", "#fc0");
-        if (gameStatus === 'FAIL') drawOverlay("生命耗盡", "重新挑戰", "#f44");
+    function drawRank() {
+        ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
+        ctx.fillStyle = "#f66"; ctx.font = "bold 70px Arial"; ctx.textAlign = "center";
+        ctx.fillText("傳奇排行榜", 360, 150);
+        
+        ctx.textAlign = "left"; ctx.font = "bold 28px Arial"; ctx.fillStyle = "#666";
+        ctx.fillText("名次  玩家名稱", 80, 250);
+        ctx.textAlign = "right"; ctx.fillText("分數 / 局數", 640, 250);
+
+        leaderBoard.forEach((item, i) => {
+            let y = 330 + i * 110;
+            ctx.fillStyle = i === 0 ? "#fc0" : "#fff";
+            ctx.textAlign = "left"; ctx.font = "bold 40px Arial";
+            ctx.fillText(`${i+1}.`, 80, y);
+            ctx.font = "bold 36px Arial";
+            ctx.fillText(`${item.name}`, 160, y);
+            
+            ctx.textAlign = "right"; ctx.font = "bold 32px Arial";
+            ctx.fillText(`${item.score.toLocaleString()}`, 640, y);
+            ctx.font = "24px Arial"; ctx.fillStyle = "#aaa";
+            ctx.fillText(`生存 ${item.rounds+1} 局`, 640, y + 40);
+        });
+
+        if(leaderBoard.length === 0) {
+            ctx.fillStyle = "#666"; ctx.textAlign = "center"; ctx.fillText("尚無對局紀錄", 360, 500);
+        }
+        drawButton(360, 1120, 300, 90, "#aaa", "回主選單");
+    }
+
+    function drawRules() {
+        ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
+        ctx.fillStyle = "#fc0"; ctx.font = "bold 60px Arial"; ctx.textAlign = "center";
+        ctx.fillText("遊戲說明", 360, 150);
+        ctx.fillStyle = "#fff"; ctx.font = "28px Arial"; ctx.textAlign = "left";
+        const rs = ["● 起手 12 步生命，每更換一張扣 1 步。","● 胡牌回補與番數相同的步數。","● 隨局數增加，限時會從 60s 縮減至 30s。","● 符合風圈/門風的刻子，額外 +1 番。","● 連續胡牌 3 局額外回補 2 步。","● 積分 = 基礎 + 番數x500 + 秒數x20 + 步數x100。"];
+        rs.forEach((r, i) => ctx.fillText(r, 60, 300 + i * 70));
+        drawButton(360, 1100, 300, 90, "#aaa", "回主選單");
+    }
+
+    function drawButton(x, y, w, h, col, txt) {
+        ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(x - w/2, y - h/2, w, h, 20); ctx.fill();
+        ctx.fillStyle = "#000"; ctx.font = "bold 45px Arial"; ctx.textAlign = "center"; ctx.fillText(txt, x, y + 15);
     }
 
     function drawResultOverlay() {
@@ -274,21 +325,24 @@
             ctx.fillStyle = "#aaa"; ctx.font = "bold 90px Arial"; ctx.textAlign="center"; ctx.fillText(`流 局`, 0, -100);
             winInfo.names.forEach((n, i) => { ctx.font = "30px Arial"; ctx.fillStyle = "#f44"; ctx.fillText(n, 0, i * 45); });
         } else {
-            ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.textAlign="center"; ctx.fillText(`${winInfo.totalFan} 番!`, 0, -150);
-            winInfo.names.forEach((n, i) => { ctx.font = "28px Arial"; ctx.fillStyle = "#fff"; ctx.fillText(n, 0, i * 40 - 50); });
-            ctx.fillStyle = "#0f0"; ctx.font = "bold 35px Arial"; ctx.fillText(`生命回補 +${winInfo.totalFan}`, 0, 180);
-            if (winStreak > 0 && winStreak % 3 === 0) { ctx.fillStyle = "#0ff"; ctx.fillText(`連莊獎勵 +2!`, 0, 240); }
+            ctx.fillStyle = "#fff"; ctx.font = "bold 40px Arial"; ctx.textAlign="center"; ctx.fillText("本局結算", 0, -320);
+            winInfo.names.forEach((n, i) => { ctx.textAlign = (i % 2 === 0) ? "right" : "left"; ctx.fillStyle = "#fff"; ctx.font = "26px Arial"; let offsetX = (i % 2 === 0) ? -40 : 40; let offsetY = -240 + Math.floor(i / 2) * 45; ctx.fillText(n, offsetX, offsetY); });
+            ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.textAlign="center"; ctx.fillText(`${winInfo.totalFan} 番!`, 0, -40);
+            ctx.fillStyle = "#0f0"; ctx.font = "bold 35px Arial"; ctx.fillText(`生命回補 +${winInfo.totalFan}`, 0, 40);
+            if (winStreak > 0 && winStreak % 3 === 0) { ctx.fillStyle = "#0ff"; ctx.fillText(`連莊獎勵 +2`, 0, 90); }
+            ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.beginPath(); ctx.roundRect(-280, 120, 560, 200, 15); ctx.fill();
+            ctx.font = "22px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
+            winInfo.details.forEach((d, i) => { ctx.fillText(d, -240, 165 + i * 38); });
+            ctx.fillStyle = "#fc0"; ctx.font = "bold 55px Arial"; ctx.textAlign = "center"; ctx.fillText(`本次得分 +${lastGainedScore.toLocaleString()}`, 0, 380);
         }
         ctx.restore();
         if(winInfo.scale < 1) winInfo.scale += 0.05;
     }
 
     function drawTile(x, y, txt, color, w, h, isS) {
-        ctx.save(); ctx.translate(x, y);
-        ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
+        ctx.save(); ctx.translate(x, y); ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
         ctx.strokeStyle = isS ? "#fc0" : "#bbb"; ctx.lineWidth = isS?6:2; ctx.stroke();
-        ctx.fillStyle = color; ctx.font = `bold ${w*0.75}px Arial`; ctx.textAlign="center"; ctx.textBaseline="middle";
-        ctx.fillText(txt||'?', 0, 5); ctx.restore();
+        ctx.fillStyle = color; ctx.font = `bold ${w*0.75}px Arial`; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(txt||'?', 0, 5); ctx.restore();
     }
 
     function drawOverlay(t, b, c) {
@@ -305,9 +359,24 @@
         const rect = canvas.getBoundingClientRect(); const scale = canvas.width / GW;
         const mx = ((e.touches ? e.touches[0].clientX : e.clientX) - rect.left) / scale;
         const my = ((e.touches ? e.touches[0].clientY : e.clientY) - rect.top) / scale;
-        if (gameStatus === 'START_SCREEN' || gameStatus === 'FAIL') return resetAndStart(true);
+
+        if (gameStatus === 'MENU') {
+            if (mx > 185 && mx < 535 && my > 665 && my < 775) resetAndStart(true);
+            if (mx > 185 && mx < 535 && my > 805 && my < 915) gameStatus = 'RULES';
+            if (mx > 185 && mx < 535 && my > 945 && my < 1055) gameStatus = 'RANK';
+            return;
+        }
+        if (gameStatus === 'RULES' || gameStatus === 'RANK') {
+            if (mx > 210 && mx < 510 && my > 1055 && my < 1185) gameStatus = 'MENU';
+            return;
+        }
+        if (gameStatus === 'FAIL') {
+            saveScore(totalScore, gameCount);
+            return gameStatus = 'MENU';
+        }
         if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
-        if (gameStatus !== 'PLAYING') return;
+        if (gameStatus !== 'PLAYING') return; 
+
         if (my > 880 && my < 960 && mx > GW/2 - 150 && mx < GW/2 + 150) { if (deck.length > 0) fillPool(); return; }
         hand.forEach((t, i) => { let tx = 88 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145; if (Math.abs(mx - tx) < 45 && Math.abs(my - ty) < 65) { if (selectedPoolIndex !== -1) performSwap(i, selectedPoolIndex); else { selectedHandIndex = (selectedHandIndex===i) ? -1 : i; playTone(600, 0.05, 0.3); } } });
         pool.forEach((p, i) => { if (Math.abs(mx - p.x) < 60 && Math.abs(my - p.y) < 80) { if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i); else { selectedPoolIndex = (selectedPoolIndex===i) ? -1 : i; playTone(500, 0.05, 0.3); } } });
@@ -316,25 +385,27 @@
     async function performSwap(hIdx, pIdx) {
         const pTile = { ...pool[pIdx] }; let tempHand = [...hand]; tempHand[hIdx] = pTile; let res = calculateTotalFan(tempHand);
         hand[hIdx] = pTile; pool.splice(pIdx, 1); selectedHandIndex = -1; selectedPoolIndex = -1; sortHand(); swapCount++;
-        if (res) { const sum = res.reduce((a, b) => a + b.fan, 0); winStreak++; let bonus = (winStreak > 0 && winStreak % 3 === 0) ? 2 : 0; winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0, isDraw: false }; movesLeft += (sum + bonus); gameStatus = 'WIN_ANIM'; playTone(880, 0.5, 0.5); }
-        else { movesLeft--; playTone(400, 0.1, 0.3); if (movesLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; } else if (deck.length === 0) checkFinalPossibility(); else if (pool.length === 0) fillPool(); }
+        if (res) {
+            const sum = res.reduce((a, b) => a + b.fan, 0); winStreak++; let bonusSteps = (winStreak > 0 && winStreak % 3 === 0) ? 2 : 0;
+            const scoreBase = 1000, scoreFan = sum * 500, scoreTime = Math.floor(timeLeft) * 20, scoreMoves = movesLeft * 100;
+            lastGainedScore = scoreBase + scoreFan + scoreTime + scoreMoves; totalScore += lastGainedScore;
+            winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0, isDraw: false, details: [`基礎胡牌: +${scoreBase}`, `番數加成 ${sum}番: +${scoreFan}`, `速度獎勵 ${Math.ceil(timeLeft)}秒: +${scoreTime}`, `生命獎勵 ${movesLeft}步: +${scoreMoves}`] };
+            movesLeft += (sum + bonusSteps); gameStatus = 'WIN_ANIM'; playTone(880, 0.5, 0.5);
+        } else {
+            movesLeft--; playTone(400, 0.1, 0.3); if (movesLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; } else if (deck.length === 0) checkFinalPossibility(); else if (pool.length === 0) fillPool();
+        }
     }
 
-    function triggerDrawGame(reason) { const isPenalized = swapCount < 3; if (isPenalized) movesLeft = Math.max(0, movesLeft - 3); winStreak = 0; winInfo = { names: isPenalized ? ["換牌不足3次", "消極處罰 -3步"] : [reason], totalFan: 0, scale: 0, isDraw: true }; gameStatus = 'WIN_ANIM'; playTone(200, 0.8, 0.4); if (movesLeft <= 0 && isPenalized) gameStatus = 'FAIL'; }
+    function triggerDrawGame(reason) { const isPenalized = swapCount < 3; if (isPenalized) movesLeft = Math.max(0, movesLeft - 3); winStreak = 0; winInfo = { names: isPenalized ? ["換牌不足3次", "消極處罰 -3步"] : [reason], totalFan: 0, scale: 0, isDraw: true, details: [] }; gameStatus = 'WIN_ANIM'; playTone(200, 0.8, 0.4); if (movesLeft <= 0 && isPenalized) gameStatus = 'FAIL'; }
 
     function loop() {
         const now = Date.now(), dt = (now - lastTimestamp) / 1000;
         lastTimestamp = now;
         if (gameStatus === 'PLAYING') {
             timeLeft -= dt;
-            let elapsed = initialTime - timeLeft;
-            if (elapsed >= 5) {
+            if (initialTime - timeLeft >= 5) {
                 let tickInterval = (timeLeft <= 10) ? 0.5 : 1.0;
-                if (lastTickTime - timeLeft >= tickInterval) {
-                    let freq = (timeLeft <= 10) ? 1400 : 900; 
-                    playTone(freq, 0.06, 0.2); 
-                    lastTickTime = timeLeft;
-                }
+                if (lastTickTime - timeLeft >= tickInterval) { playTone((timeLeft <= 10) ? 1400 : 900, 0.06, 0.2); lastTickTime = timeLeft; }
             }
             if (timeLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; }
         }
