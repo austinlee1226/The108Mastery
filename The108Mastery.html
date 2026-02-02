@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Pixel JD - 拾八雀：競技終極版</title>
+    <title>Pixel JD - 拾八雀：競技終極版 (強效音量)</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -36,7 +36,8 @@
     let lastTimestamp = 0, swapCount = 0;
     let winInfo = { names: [], totalFan: 0, scale: 0, isDraw: false };
 
-    function playTone(freq, dur, vol = 0.1) {
+    // 音量大幅強化版
+    function playTone(freq, dur, vol = 0.3) {
         if (!window.audioCtx) window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = window.audioCtx.createOscillator();
         const g = window.audioCtx.createGain();
@@ -72,7 +73,6 @@
             roundWindIdx = Math.floor(gameCount / 4) % 4;
         }
         
-        // 修正後的難度曲線
         if (gameCount < 5) initialTime = 60;
         else if (gameCount < 15) initialTime = 60 - (Math.floor(gameCount / 5) * 5);
         else initialTime = Math.max(30, 50 - (Math.floor(gameCount / 10) * 5));
@@ -93,8 +93,8 @@
         
         for(let i = 0; i < 14; i++) {
             let t = hand[i]; t.x = 800; t.y = 1100;
-            if (i < 13) { playTone(500 + (i * 30), 0.08, 0.05); await new Promise(r => setTimeout(r, 60)); }
-            else { playTone(800, 0.1, 0.1); }
+            if (i < 13) { playTone(500 + (i * 30), 0.08, 0.2); await new Promise(r => setTimeout(r, 60)); }
+            else { playTone(800, 0.15, 0.4); } // 發最後一張牌大聲一點
         }
         sortHand(); fillPool(); gameStatus = 'PLAYING';
     }
@@ -141,11 +141,9 @@
         let fanList = [];
         const counts = {}; 
         h.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
-
         if (checkThirteenOrphans(counts)) return [{ name: "十三么", fan: 13 }];
         const hasSuit = h.some(t => ['MAN','TONG','TIAO'].includes(t.type));
         if (!hasSuit) return [{ name: "字一色", fan: 13 }];
-
         let best = null;
         for (let key in counts) {
             if (counts[key] >= 2) {
@@ -154,37 +152,30 @@
             }
         }
         if (!best) return null;
-
         const mianzi = best.mianzi;
         const kezi = mianzi.filter(x => x.type === 'ke');
         if (checkChuuren(h)) return [{ name: "九蓮寶燈", fan: 13 }];
-
         const windsCount = kezi.filter(x => x.tile.startsWith('WIND')).length;
         if (windsCount === 4) fanList.push({ name: "大四喜", fan: 13 });
         else if (windsCount === 3 && best.jiang.startsWith('WIND')) fanList.push({ name: "小四喜", fan: 8 });
-
         const isAll19 = h.every(t => (t.val === 1 || t.val === 9) || ['WIND','DRAGON'].includes(t.type));
         if (isAll19 && kezi.length === 4) {
             if (h.every(t => (t.val === 1 || t.val === 9))) fanList.push({ name: "清么九", fan: 10 });
             else fanList.push({ name: "混么九", fan: 5 });
         }
-
         const dragonsCount = kezi.filter(x => x.tile.startsWith('DRAGON')).length;
         if (dragonsCount === 3) fanList.push({ name: "大三元", fan: 8 });
         else if (dragonsCount === 2 && best.jiang.startsWith('DRAGON')) fanList.push({ name: "小三元", fan: 5 });
-
         if (kezi.length === 4 && fanList.length === 0) fanList.push({ name: "對對胡", fan: 3 });
         const pureStatus = checkPureSuit(h);
         if (pureStatus === 'PURE') fanList.push({ name: "清一色", fan: 7 });
         else if (pureStatus === 'MIXED' && !fanList.some(f => f.fan >= 5)) fanList.push({ name: "混一色", fan: 3 });
-
         kezi.forEach(k => {
             if (k.tile === 'WIND' + WINDS[roundWindIdx]) fanList.push({ name: "圈風刻", fan: 1 });
             if (k.tile === 'WIND' + WINDS[seatWindIdx]) fanList.push({ name: "門風刻", fan: 1 });
             const val = parseInt(k.tile.replace(/[A-Z]/g, ''));
             if (val === 1 || val === 9) fanList.push({ name: "么九刻", fan: 1 });
         });
-
         if (fanList.length === 0) fanList.push({ name: "雞胡", fan: 1 });
         return fanList;
     }
@@ -256,10 +247,7 @@
         }
 
         ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0, 970, GW, 310);
-        hand.forEach((t, i) => {
-            let isS = (i === selectedHandIndex);
-            drawTile(t.x, t.y - (isS ? 40 : 0), t.txt, getCol(t.type), 88, 125, isS);
-        });
+        hand.forEach((t, i) => drawTile(t.x, t.y - (i === selectedHandIndex ? 40 : 0), t.txt, getCol(t.type), 88, 125, i === selectedHandIndex));
 
         if (gameStatus === 'WIN_ANIM') drawResultOverlay();
         if (gameStatus === 'START_SCREEN') drawOverlay("Pixel JD 拾八雀", "開始遊戲", "#fc0");
@@ -308,32 +296,30 @@
         if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
         if (gameStatus !== 'PLAYING') return;
         if (my > 880 && my < 960 && mx > GW/2 - 150 && mx < GW/2 + 150) { if (deck.length > 0) fillPool(); return; }
-        hand.forEach((t, i) => { let tx = 88 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145; if (Math.abs(mx - tx) < 45 && Math.abs(my - ty) < 65) { if (selectedPoolIndex !== -1) performSwap(i, selectedPoolIndex); else { selectedHandIndex = (selectedHandIndex===i) ? -1 : i; playTone(600, 0.05); } } });
-        pool.forEach((p, i) => { if (Math.abs(mx - p.x) < 60 && Math.abs(my - p.y) < 80) { if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i); else { selectedPoolIndex = (selectedPoolIndex===i) ? -1 : i; playTone(500, 0.05); } } });
+        hand.forEach((t, i) => { let tx = 88 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145; if (Math.abs(mx - tx) < 45 && Math.abs(my - ty) < 65) { if (selectedPoolIndex !== -1) performSwap(i, selectedPoolIndex); else { selectedHandIndex = (selectedHandIndex===i) ? -1 : i; playTone(600, 0.05, 0.3); } } });
+        pool.forEach((p, i) => { if (Math.abs(mx - p.x) < 60 && Math.abs(my - p.y) < 80) { if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i); else { selectedPoolIndex = (selectedPoolIndex===i) ? -1 : i; playTone(500, 0.05, 0.3); } } });
     }
 
     async function performSwap(hIdx, pIdx) {
         const pTile = { ...pool[pIdx] }; let tempHand = [...hand]; tempHand[hIdx] = pTile; let res = calculateTotalFan(tempHand);
         hand[hIdx] = pTile; pool.splice(pIdx, 1); selectedHandIndex = -1; selectedPoolIndex = -1; sortHand(); swapCount++;
-        if (res) { const sum = res.reduce((a, b) => a + b.fan, 0); winStreak++; let bonus = (winStreak > 0 && winStreak % 3 === 0) ? 2 : 0; winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0, isDraw: false }; movesLeft += (sum + bonus); gameStatus = 'WIN_ANIM'; playTone(880, 0.5); }
-        else { movesLeft--; playTone(400, 0.1); if (movesLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; } else if (deck.length === 0) checkFinalPossibility(); else if (pool.length === 0) fillPool(); }
+        if (res) { const sum = res.reduce((a, b) => a + b.fan, 0); winStreak++; let bonus = (winStreak > 0 && winStreak % 3 === 0) ? 2 : 0; winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0, isDraw: false }; movesLeft += (sum + bonus); gameStatus = 'WIN_ANIM'; playTone(880, 0.5, 0.5); }
+        else { movesLeft--; playTone(400, 0.1, 0.3); if (movesLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; } else if (deck.length === 0) checkFinalPossibility(); else if (pool.length === 0) fillPool(); }
     }
 
-    function triggerDrawGame(reason) { const isPenalized = swapCount < 3; if (isPenalized) movesLeft = Math.max(0, movesLeft - 3); winStreak = 0; winInfo = { names: isPenalized ? ["換牌不足3次", "消極處罰 -3步"] : [reason], totalFan: 0, scale: 0, isDraw: true }; gameStatus = 'WIN_ANIM'; playTone(200, 0.8); if (movesLeft <= 0 && isPenalized) gameStatus = 'FAIL'; }
+    function triggerDrawGame(reason) { const isPenalized = swapCount < 3; if (isPenalized) movesLeft = Math.max(0, movesLeft - 3); winStreak = 0; winInfo = { names: isPenalized ? ["換牌不足3次", "消極處罰 -3步"] : [reason], totalFan: 0, scale: 0, isDraw: true }; gameStatus = 'WIN_ANIM'; playTone(200, 0.8, 0.4); if (movesLeft <= 0 && isPenalized) gameStatus = 'FAIL'; }
 
     function loop() {
         const now = Date.now(), dt = (now - lastTimestamp) / 1000;
         lastTimestamp = now;
         if (gameStatus === 'PLAYING') {
             timeLeft -= dt;
-            
-            // 時間聲效邏輯
             let elapsed = initialTime - timeLeft;
             if (elapsed >= 5) {
                 let tickInterval = (timeLeft <= 10) ? 0.5 : 1.0;
                 if (lastTickTime - timeLeft >= tickInterval) {
-                    let freq = (timeLeft <= 10) ? 1200 : 800; // 最後10秒音調變高
-                    playTone(freq, 0.05, 0.03);
+                    let freq = (timeLeft <= 10) ? 1400 : 900; 
+                    playTone(freq, 0.06, 0.15); // 滴答聲也加大音量
                     lastTickTime = timeLeft;
                 }
             }
