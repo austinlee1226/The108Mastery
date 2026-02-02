@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>拾肆雀：Arcade Plus (Discard Mode)</title>
+    <title>拾肆雀：Arcade Plus (含槓牌版)</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -28,6 +28,11 @@ let swapActionCount = 0, gameCount = 0;
 let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
 let isTenpai = false; 
 let richiPad = []; 
+
+// --- 新增槓牌相關變數 ---
+let gangCandidates = []; // 存儲可槓的牌型 Key
+let isGangSelecting = false; // 是否處於選擇槓牌模式
+// ---------------------
 
 let winInfo = { names: [], totalTai: 0, scale: 0, thisWinTotal: 0 };
 let winPending = false; 
@@ -77,6 +82,7 @@ function resetAndStart(isFullReset) {
     swapActionCount = 0; flowersWon = []; gangsWon = [];
     selectedHandIndex = -1; selectedPoolIndex = -1;
     winPending = false; isTenpai = false; richiPad = [];
+    gangCandidates = []; isGangSelecting = false; // 重置槓牌狀態
     startOpeningSequence();
 }
 
@@ -104,6 +110,7 @@ async function startOpeningSequence() {
     await handleFlowers();
     sortHand(); 
     fillFullPool();
+    checkGangStatus(); // 檢查起手是否有暗槓
     checkTenpaiStatus();
     gameStatus = 'PLAYING';
 }
@@ -116,15 +123,10 @@ async function handleFlowers() {
             if(hand[i].type === 'FLOWER') {
                 playTone(1100, 0.1, 0.1);
                 flowersWon.push(hand[i]);
-                
-                // 補牌時檢查牌堆是否還有牌，沒有則重新洗牌 (理論上這遊戲步數少不太會發生)
                 if(deck.length === 0) deck = createDeck();
-                
                 let newTile = deck.pop();
-                newTile.x = hand[i].x; 
-                newTile.y = hand[i].y;
+                newTile.x = hand[i].x; newTile.y = hand[i].y;
                 hand[i] = newTile;
-                
                 hasFlower = true; await delay(200); break;
             }
         }
@@ -142,56 +144,96 @@ function fillFullPool() {
     }
 }
 
-// --- 核心邏輯修改區 ---
+// --- 槓牌邏輯 ---
+function checkGangStatus() {
+    const counts = {};
+    hand.forEach(t => {
+        const key = t.type + (t.val || t.txt);
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    gangCandidates = Object.keys(counts).filter(k => counts[k] === 4);
+    if (gangCandidates.length === 0) isGangSelecting = false;
+}
+
+async function performGang(targetKey) {
+    if (gameStatus !== 'PLAYING') return;
+
+    // 1. 紀錄要槓的牌
+    const exampleTile = hand.find(t => (t.type + (t.val || t.txt)) === targetKey);
+    
+    // 2. 移除手牌中的 4 張
+    hand = hand.filter(t => (t.type + (t.val || t.txt)) !== targetKey);
+    
+    // 3. 加入槓牌區
+    gangsWon.push({ isAnGang: true, tile: exampleTile, txt: exampleTile.txt });
+    
+    // 4. 嶺上開花
+    if(deck.length === 0) deck = createDeck();
+    let newTile = deck.pop();
+    newTile.x = GW / 2; newTile.y = GH + 100;
+    hand.push(newTile);
+    
+    // 5. 效果與重置
+    playTone(300, 0.1); 
+    setTimeout(() => playTone(800, 0.1), 150);
+    
+    isGangSelecting = false;
+    selectedHandIndex = -1;
+    
+    sortHand(); 
+    checkGangStatus(); 
+    
+    // 槓完後檢查是否胡牌
+    let results = calculateTotalTai(hand, flowersWon, gangsWon);
+    if (results) {
+        await delay(300);
+        winPending = true; playTone(987, 0.3); triggerWin(results);
+    } else {
+        checkTenpaiStatus();
+    }
+}
+
+function handleGangClick() {
+    if (gangCandidates.length === 0) return;
+    if (gangCandidates.length === 1) {
+        performGang(gangCandidates[0]);
+    } else {
+        isGangSelecting = !isGangSelecting; 
+        playTone(600, 0.05);
+    }
+}
+// ----------------
+
 async function performSwap(hIdx, pIdx) {
     if (gameStatus !== 'PLAYING' || winPending) return;
     
-    // 1. 取得玩家想要的牌池牌
     const poolTile = { ...pool[pIdx] };
-    
-    // 2. 暫時模擬手牌狀態來檢查是否胡牌
     let tempHand = [...hand]; tempHand[hIdx] = poolTile; 
     let results = calculateTotalTai(tempHand, flowersWon, gangsWon);
     
     if (results) {
-        // 胡牌：直接拿進來
         hand[hIdx] = poolTile; pool.splice(pIdx, 1);
         selectedHandIndex = -1; selectedPoolIndex = -1;
         sortHand(); await delay(200);
         winPending = true; playTone(987, 0.3); triggerWin(results);
     } else {
-        // 沒有胡牌 -> 執行「丟棄 + 補新牌」邏輯
         if (!isTenpai) movesLeft--; 
-        
-        // A. 玩家手上的牌被丟棄 (消失)
-        // B. 牌池的牌進入玩家手中
         hand[hIdx] = poolTile;
 
-        // C. 從牌堆抽一張新牌填補牌池空缺
-        if(deck.length === 0) {
-            // 極端情況：牌堆沒牌了，簡單做個重置或結束，這裡選擇重置一部分
-            deck = createDeck(); 
-        }
-        
+        if(deck.length === 0) deck = createDeck();
         let newDeckTile = deck.pop();
-        
-        // 設定新牌的動畫起始點 (從畫面底部飛上來，表示從牌山抽的)
-        newDeckTile.x = GW / 2;
-        newDeckTile.y = GH + 100; 
-        
-        // 設定新牌的目標位置 (原本牌池的那個位置)
+        newDeckTile.x = GW / 2; newDeckTile.y = GH + 100; 
         newDeckTile.targetX = 110 + (pIdx % 5) * 125;
         newDeckTile.targetY = 480 + Math.floor(pIdx / 5) * 145;
 
-        // 放入牌池
         pool[pIdx] = newDeckTile;
         
-        // 播放音效：丟牌聲 + 抽牌聲
-        playTone(300, 0.05); // 丟棄低音
-        setTimeout(() => playTone(600, 0.05), 100); // 補牌高音
+        playTone(300, 0.05); 
+        setTimeout(() => playTone(600, 0.05), 100); 
         
         selectedHandIndex = -1; selectedPoolIndex = -1;
         sortHand();
+        checkGangStatus(); // 換牌後檢查是否出現槓
         checkTenpaiStatus(); 
         if (movesLeft <= 0 && !isTenpai) gameStatus = 'FAIL';
     }
@@ -288,6 +330,12 @@ function draw() {
     
     flowersWon.forEach((f, i) => drawTile(60 + i*55, 280, f.txt, '#f57c00', 50, 70, false, 28));
     
+    // 繪製槓牌 (放在花牌旁邊或下面)
+    gangsWon.forEach((g, i) => {
+         // 稍微錯開位置顯示
+         drawTile(GW - 80 - i*60, 280, g.txt, '#8e24aa', 55, 75, false, 30, true);
+    });
+    
     // 繪製牌池
     pool.forEach((p, i) => {
         drawTile(p.x, p.y, p.txt, getCol(p.type), 110, 150, i === selectedPoolIndex, 65);
@@ -297,8 +345,32 @@ function draw() {
     hand.forEach((t, i) => {
         let isFocus = i === selectedHandIndex;
         let showGlow = isTenpai && richiPad[i];
+        
+        // 槓牌選擇模式下的高亮
+        if (isGangSelecting) {
+            let key = t.type + (t.val || t.txt);
+            if (gangCandidates.includes(key)) showGlow = true;
+        }
+
         drawTile(t.x, t.y - (isFocus?45:0), t.txt, getCol(t.type), 92, 132, isFocus, null, showGlow);
     });
+
+    // --- 繪製槓牌按鈕 ---
+    if (gangCandidates.length > 0 && gameStatus === 'PLAYING' && !winPending) {
+        let btnX = 580, btnY = 880, btnW = 120, btnH = 60;
+        
+        ctx.save();
+        ctx.fillStyle = isGangSelecting ? "#f57f17" : "#ffca28"; 
+        ctx.shadowBlur = 10; ctx.shadowColor = "rgba(0,0,0,0.5)";
+        ctx.beginPath(); ctx.roundRect(btnX, btnY, btnW, btnH, 10); ctx.fill();
+        
+        ctx.fillStyle = "#3e2723";
+        ctx.font = "bold 32px Arial";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(isGangSelecting ? "選牌" : "槓 !", btnX + btnW/2, btnY + btnH/2);
+        ctx.restore();
+    }
+    // -----------------
 
     if (winPending) { ctx.fillStyle = "#fc0"; ctx.font = "bold 120px Arial"; ctx.fillText("榮 和 !", 360, 640); }
     if (gameStatus === 'WIN_ANIM') drawWinOverlay();
@@ -324,23 +396,58 @@ function handleInput(e) {
     if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
     if (gameStatus !== 'PLAYING' || winPending) return;
 
+    // --- 檢測槓牌按鈕 ---
+    if (gangCandidates.length > 0) {
+        let btnX = 580, btnY = 880, btnW = 120, btnH = 60;
+        if (mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH) {
+            handleGangClick();
+            return;
+        }
+    }
+
+    let clickedHandIndex = -1;
     hand.forEach((t, i) => { 
-        if (Math.abs(mx - t.x) < 45 && Math.abs(my - t.y) < 65) {
-            if (selectedPoolIndex !== -1) performSwap(i, selectedPoolIndex); 
-            else { selectedHandIndex = (selectedHandIndex===i)?-1:i; playTone(659,0.05); }
-        }
+        if (Math.abs(mx - t.x) < 45 && Math.abs(my - t.y) < 65) clickedHandIndex = i;
     });
-    pool.forEach((p, i) => { 
-        if (Math.abs(mx - p.x) < 55 && Math.abs(my - p.y) < 75) {
-            if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i); 
-            else { selectedPoolIndex = (selectedPoolIndex===i)?-1:i; playTone(523,0.05); }
+
+    if (clickedHandIndex !== -1) {
+        // A. 槓牌選擇模式
+        if (isGangSelecting) {
+            let t = hand[clickedHandIndex];
+            let key = t.type + (t.val || t.txt);
+            if (gangCandidates.includes(key)) {
+                performGang(key); 
+            } else {
+                isGangSelecting = false; 
+                playTone(200, 0.1); 
+            }
+            return; 
         }
-    });
+
+        // B. 正常換牌模式
+        if (selectedPoolIndex !== -1) performSwap(clickedHandIndex, selectedPoolIndex); 
+        else { selectedHandIndex = (selectedHandIndex===clickedHandIndex)?-1:clickedHandIndex; playTone(659,0.05); }
+        return;
+    }
+
+    // 牌池操作 (若在選槓則禁用)
+    if (!isGangSelecting) {
+        pool.forEach((p, i) => { 
+            if (Math.abs(mx - p.x) < 55 && Math.abs(my - p.y) < 75) {
+                if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i); 
+                else { selectedPoolIndex = (selectedPoolIndex===i)?-1:i; playTone(523,0.05); }
+            }
+        });
+    }
 }
 
 function update() {
     const now = Date.now(), dt = (now - lastTimestamp) / 1000; lastTimestamp = now;
     glowValue = (Math.sin(now / 150) + 1) / 2; 
+
+    // 持續檢查槓牌狀態
+    if (gameStatus === 'PLAYING') checkGangStatus();
+
     if (gameStatus === 'PLAYING' && !winPending) {
         timeLeft -= dt; if (timeLeft <= 0) gameStatus = 'FAIL';
     }
@@ -379,8 +486,10 @@ function drawWinOverlay() {
     ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.textAlign="center";
     ctx.fillText(`${winInfo.totalTai} 台!`, 0, -200);
     ctx.font = "32px Arial"; ctx.fillStyle = "#fff";
-    ctx.fillText(`得分：+${winInfo.thisWinTotal.toLocaleString()}`, 0, 0);
-    ctx.fillStyle = "#aaa"; ctx.font = "24px Arial"; ctx.fillText("點擊繼續下一局", 0, 200); ctx.restore();
+    winInfo.names.forEach((n, i) => ctx.fillText(n, 0, -100 + i * 40));
+    ctx.font = "40px Arial"; ctx.fillStyle = "#0f0";
+    ctx.fillText(`得分：+${winInfo.thisWinTotal.toLocaleString()}`, 0, 150);
+    ctx.fillStyle = "#aaa"; ctx.font = "24px Arial"; ctx.fillText("點擊繼續下一局", 0, 250); ctx.restore();
     if(winInfo.scale < 1) winInfo.scale += 0.05;
 }
 function drawOverlay(t, b, c) {
