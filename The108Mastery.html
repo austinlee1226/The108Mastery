@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Pixel JD - 拾八雀：13張智能流局版</title>
+    <title>Pixel JD - 拾八雀：13張智能優化版</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -62,27 +62,47 @@
         ctx.scale(scale, scale);
     }
 
+    // ==========================================
+    // 核心優化：起手牌控制演算法
+    // ==========================================
     async function resetAndStart(isFullReset) {
         if(isFullReset) { totalScore = 0; movesLeft = 10; }
         timeLeft = 60; selectedHandIndex = -1; selectedPoolIndex = -1;
         swapCount = 0;
-        
         gameStatus = 'DEALING';
-        deck = createDeck();
-        hand = []; pool = [];
-
-        for(let i = 0; i < 13; i++) {
-            let t = deck.pop();
-            t.x = 800; t.y = 1100;
-            hand.push(t);
-            playTone(500 + (i * 30), 0.08, 0.05);
-            await new Promise(r => setTimeout(r, 60));
-        }
         
-        let drawTile = deck.pop();
-        drawTile.x = 800; drawTile.y = 1100;
-        hand.push(drawTile);
-        playTone(800, 0.1, 0.1); 
+        // 1. 生成並分類牌庫
+        let fullDeck = createDeck();
+        let suitTiles = fullDeck.filter(t => ['MAN', 'TONG', 'TIAO'].includes(t.type));
+        let wordTiles = fullDeck.filter(t => ['WIND', 'DRAGON'].includes(t.type));
+
+        // 2. 決定起手字牌數量 (限制在 2~5 張，體感最均衡)
+        let wordCountForHand = Math.floor(Math.random() * 4) + 2; 
+        
+        hand = [];
+        // 抽取指定數量的字牌
+        for(let i = 0; i < wordCountForHand; i++) {
+            hand.push(wordTiles.pop());
+        }
+        // 用花色牌補齊到 14 張
+        while(hand.length < 14) {
+            hand.push(suitTiles.pop());
+        }
+
+        // 3. 將剩下的牌混合回牌庫
+        deck = [...suitTiles, ...wordTiles].sort(() => Math.random() - 0.5);
+
+        // 4. 發牌動畫
+        for(let i = 0; i < 14; i++) {
+            let t = hand[i];
+            t.x = 800; t.y = 1100;
+            if (i < 13) {
+                playTone(500 + (i * 30), 0.08, 0.05);
+                await new Promise(r => setTimeout(r, 60));
+            } else {
+                playTone(800, 0.1, 0.1); // 第 14 張摸牌音效
+            }
+        }
 
         sortHand();
         fillPool();
@@ -111,34 +131,23 @@
             t.targetY = 480 + Math.floor(i / 3) * 145;
             pool.push(t);
         }
-        // 每次填充完牌池，如果是牌庫最後一批，檢查是否流局
         if (deck.length === 0) checkFinalPossibility();
     }
 
-    // ==========================================
-    // 流局智能判定
-    // ==========================================
     function checkFinalPossibility() {
-        if (deck.length > 0) return; // 牌庫還有牌，不需要判斷
-        
+        if (deck.length > 0) return;
         let canWin = false;
-        // 模擬牌池中的每一張牌
         for (let pTile of pool) {
-            // 嘗試換入到手牌中的每一個位置
             for (let i = 0; i < hand.length; i++) {
                 let tempHand = JSON.parse(JSON.stringify(hand));
                 tempHand[i] = pTile;
                 if (calculateTotalFan(tempHand)) {
-                    canWin = true;
-                    break;
+                    canWin = true; break;
                 }
             }
             if (canWin) break;
         }
-
-        if (!canWin) {
-            triggerDrawGame("牌池無解，確定流局");
-        }
+        if (!canWin) triggerDrawGame("牌池無解，自動流局");
     }
 
     function calculateTotalFan(h) {
@@ -205,10 +214,6 @@
 
     function checkBigThree(m) { return m.filter(x => x.type === 'ke' && x.tile.includes('DRAGON')).length === 3; }
     function checkSmallThree(m, j) { return m.filter(x => x.type === 'ke' && x.tile.includes('DRAGON')).length === 2 && j.includes('DRAGON'); }
-
-    // ==========================================
-    // 渲染與更新
-    // ==========================================
 
     function draw() {
         ctx.clearRect(0, 0, GW, GH);
@@ -332,10 +337,7 @@
     function triggerDrawGame(reason) {
         const isPenalized = swapCount < 3;
         if (isPenalized) movesLeft = Math.max(0, movesLeft - 3);
-        winInfo = { 
-            names: isPenalized ? ["換牌不足3次", "消極比賽處罰 -3步"] : [reason], 
-            totalFan: 0, scale: 0, isDraw: true 
-        };
+        winInfo = { names: isPenalized ? ["換牌不足3次", "消極處罰 -3步"] : [reason], totalFan: 0, scale: 0, isDraw: true };
         gameStatus = 'WIN_ANIM'; playTone(200, 0.8);
         if (movesLeft <= 0 && isPenalized) gameStatus = 'FAIL';
     }
