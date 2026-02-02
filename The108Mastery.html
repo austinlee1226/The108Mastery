@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Pixel JD - 拾八雀：正統 13張修復版</title>
+    <title>Pixel JD - 拾八雀：13張生存挑戰版</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -33,9 +33,8 @@
     let gameStatus = 'START_SCREEN', totalScore = 0, movesLeft = 10, timeLeft = 60;
     let hand = [], pool = [], deck = [];
     let selectedHandIndex = -1, selectedPoolIndex = -1;
-    let lastTimestamp = 0, isRichi = false, richiAutoTimer = 0;
-    let winInfo = { names: [], totalFan: 0, scale: 0 };
-    let hintMessage = "選一張廢牌後點擊報聽";
+    let lastTimestamp = 0, swapCount = 0;
+    let winInfo = { names: [], totalFan: 0, scale: 0, isDraw: false };
 
     function playTone(freq, dur, vol = 0.1) {
         if (!window.audioCtx) window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -66,8 +65,7 @@
     async function resetAndStart(isFullReset) {
         if(isFullReset) { totalScore = 0; movesLeft = 10; }
         timeLeft = 60; selectedHandIndex = -1; selectedPoolIndex = -1;
-        isRichi = false; richiAutoTimer = 0;
-        hintMessage = "選一張廢牌後點擊報聽";
+        swapCount = 0;
         
         gameStatus = 'DEALING';
         deck = createDeck();
@@ -103,6 +101,7 @@
     }
 
     function fillPool() {
+        if (deck.length === 0) return; 
         pool = [];
         while(pool.length < 9 && deck.length > 0) {
             let t = deck.pop();
@@ -115,7 +114,7 @@
     }
 
     // ==========================================
-    // 判定邏輯
+    // 判定邏輯 (13張胡牌14張)
     // ==========================================
 
     function calculateTotalFan(h) {
@@ -146,8 +145,6 @@
         else if (pureStatus === 'MIXED') fanList.push({ name: "混一色", fan: 3 });
 
         if (fanList.length === 0) fanList.push({ name: "雞胡", fan: 1 });
-        if (isRichi) fanList.push({ name: "報聽獎勵", fan: 1 });
-
         return fanList;
     }
 
@@ -195,56 +192,58 @@
 
     function draw() {
         ctx.clearRect(0, 0, GW, GH);
-        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, 0, GW, 200);
+        // Top UI
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, 0, GW, 180);
         ctx.fillStyle = "#fff"; ctx.font = "bold 40px Arial"; ctx.textAlign = "center";
-        ctx.fillText(`拾八雀：正統 13張版`, 360, 60);
+        ctx.fillText(`拾八雀：13張生存挑戰`, 360, 60);
         ctx.fillStyle = movesLeft <= 2 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
         ctx.fillStyle = "#fc0"; ctx.fillText(`限時: ${Math.ceil(timeLeft)}s`, 540, 130);
-        
-        // 提示字
-        ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.font = "24px Arial";
-        ctx.fillText(isRichi ? "報聽中：自動尋找胡牌..." : hintMessage, 360, 180);
 
+        // Pool
         pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
 
+        // Buttons
         if (gameStatus === 'PLAYING') {
-            ctx.fillStyle = (deck.length > 0 && !isRichi) ? "#e64a19" : "#444";
-            ctx.beginPath(); ctx.roundRect(50, 880, 240, 80, 15); ctx.fill();
-            ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; ctx.fillText("更換牌池", 170, 930);
-
-            ctx.fillStyle = isRichi ? "#555" : (selectedHandIndex !== -1 ? "#d32f2f" : "#666");
-            ctx.beginPath(); ctx.roundRect(310, 880, 360, 80, 15); ctx.fill();
-            ctx.fillStyle = "#fff"; ctx.fillText(isRichi ? "已報聽" : "報聽 (+1番)", 490, 930);
+            ctx.fillStyle = (deck.length > 0) ? "#e64a19" : "#444";
+            ctx.beginPath(); ctx.roundRect(GW/2 - 120, 880, 240, 80, 15); ctx.fill();
+            ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; ctx.fillText(deck.length > 0 ? "更換牌池" : "牌庫已空", GW/2, 930);
         }
 
+        // Hand
         ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0, 960, GW, 320);
         hand.forEach((t, i) => {
             let isS = (i === selectedHandIndex);
-            drawTile(t.x, t.y - (isS ? 40 : 0), t.txt, getCol(t.type), 88, 125, isS, isRichi);
+            drawTile(t.x, t.y - (isS ? 40 : 0), t.txt, getCol(t.type), 88, 125, isS);
         });
 
-        if (gameStatus === 'WIN_ANIM') drawWinOverlay();
+        if (gameStatus === 'WIN_ANIM') drawResultOverlay();
         if (gameStatus === 'START_SCREEN') drawOverlay("拾八雀", "開始遊戲", "#fc0");
-        if (gameStatus === 'FAIL') drawOverlay("殘念", "重新挑戰", "#f44");
+        if (gameStatus === 'FAIL') drawOverlay("挑戰結束", "重新挑戰", "#f44");
     }
 
-    function drawWinOverlay() {
+    function drawResultOverlay() {
         ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
         ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
-        ctx.fillStyle = "#fc0"; ctx.font = "bold 90px Arial"; ctx.fillText(`${winInfo.totalFan} 番!`, 0, -120);
-        ctx.font = "35px Arial"; ctx.fillStyle = "#fff";
-        winInfo.names.forEach((n, i) => ctx.fillText(n, 0, i * 50));
-        ctx.fillStyle = "#0f0"; ctx.fillText(`步數回補 +${winInfo.totalFan}`, 0, 250);
+        
+        if (winInfo.isDraw) {
+            ctx.fillStyle = "#aaa"; ctx.font = "bold 90px Arial"; ctx.fillText(`流 局`, 0, -100);
+            ctx.font = "30px Arial"; ctx.fillStyle = "#f44";
+            winInfo.names.forEach((n, i) => ctx.fillText(n, 0, i * 45));
+        } else {
+            ctx.fillStyle = "#fc0"; ctx.font = "bold 90px Arial"; ctx.fillText(`${winInfo.totalFan} 番!`, 0, -120);
+            ctx.font = "35px Arial"; ctx.fillStyle = "#fff";
+            winInfo.names.forEach((n, i) => ctx.fillText(n, 0, i * 50));
+            ctx.fillStyle = "#0f0"; ctx.fillText(`步數回補 +${winInfo.totalFan}`, 0, 250);
+        }
         ctx.restore();
         if(winInfo.scale < 1) winInfo.scale += 0.05;
     }
 
-    function drawTile(x, y, txt, color, w, h, isS, isL) {
+    function drawTile(x, y, txt, color, w, h, isS) {
         ctx.save(); ctx.translate(x, y);
-        ctx.fillStyle = isL ? "#ddd" : "#fff"; 
-        ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
-        ctx.strokeStyle = isS ? "#fc0" : (isL ? "#999" : "#bbb"); ctx.lineWidth = isS?6:2; ctx.stroke();
-        ctx.fillStyle = isL ? "#666" : color; ctx.font = `bold ${w*0.75}px Arial`; ctx.textAlign="center"; ctx.textBaseline="middle";
+        ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 8); ctx.fill();
+        ctx.strokeStyle = isS ? "#fc0" : "#bbb"; ctx.lineWidth = isS?6:2; ctx.stroke();
+        ctx.fillStyle = color; ctx.font = `bold ${w*0.75}px Arial`; ctx.textAlign="center"; ctx.textBaseline="middle";
         ctx.fillText(txt||'?', 0, 5); ctx.restore();
     }
 
@@ -258,7 +257,6 @@
     function getCol(t) { return t==='MAN'?'#d32f2f':t==='TONG'?'#1976d2':t==='TIAO'?'#2e7d32':'#4a148c'; }
 
     function sortHand() {
-        if(isRichi) return; // 報聽後不排序，維持聽牌陣型
         const order = {'MAN':0, 'TONG':1, 'TIAO':2, 'WIND':3, 'DRAGON':4};
         hand.sort((a,b) => order[a.type] - order[b.type] || (a.val || a.txt).toString().localeCompare((b.val || b.txt).toString()));
     }
@@ -273,23 +271,11 @@
         if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
         if (gameStatus !== 'PLAYING') return;
 
-        if (my > 880 && my < 960) {
-            if (mx > 50 && mx < 290 && deck.length > 0 && !isRichi) return fillPool();
-            // 報聽邏輯：必須先選一張手牌
-            if (mx > 310 && mx < 670 && !isRichi) {
-                if (selectedHandIndex !== -1) {
-                    isRichi = true;
-                    performSwap(selectedHandIndex, 0); // 打出選中的牌，進入自動模式
-                    playTone(1200, 0.5);
-                } else {
-                    hintMessage = "⚠️ 請先點選一張廢牌再報聽！";
-                    playTone(200, 0.2);
-                }
-                return;
-            }
+        // 更換牌池按鈕
+        if (my > 880 && my < 960 && mx > GW/2 - 120 && mx < GW/2 + 120) {
+            if (deck.length > 0) fillPool();
+            return;
         }
-
-        if (isRichi) return;
 
         hand.forEach((t, i) => {
             let tx = 88 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
@@ -315,16 +301,33 @@
         hand[hIdx] = pTile; pool.splice(pIdx, 1);
         selectedHandIndex = -1; selectedPoolIndex = -1;
         sortHand();
+        swapCount++;
 
         if (res) {
             const sum = res.reduce((a, b) => a + b.fan, 0);
-            winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0 };
+            winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0, isDraw: false };
             movesLeft += sum; gameStatus = 'WIN_ANIM'; playTone(880, 0.5);
         } else {
-            if (!isRichi) { movesLeft--; playTone(400, 0.1); } // 報聽自動模式不扣步數
+            movesLeft--; playTone(400, 0.1);
             if (movesLeft <= 0) gameStatus = 'FAIL';
-            else if (pool.length === 0) fillPool();
+            else if (pool.length === 0) {
+                if (deck.length > 0) fillPool();
+                else triggerDrawGame(); // 牌庫跟牌池都空了，觸發流局
+            }
         }
+    }
+
+    function triggerDrawGame() {
+        const isPenalized = swapCount < 3;
+        if (isPenalized) movesLeft = Math.max(0, movesLeft - 3);
+        
+        winInfo = { 
+            names: isPenalized ? ["換牌不足3次", "消極比賽處罰 -3步"] : ["可惜！牌庫已用盡"], 
+            totalFan: 0, scale: 0, isDraw: true 
+        };
+        gameStatus = 'WIN_ANIM';
+        playTone(200, 0.8);
+        if (movesLeft <= 0 && isPenalized) gameStatus = 'FAIL';
     }
 
     function loop() {
@@ -332,24 +335,7 @@
         lastTimestamp = now;
         if (gameStatus === 'PLAYING') {
             timeLeft -= dt;
-            if (timeLeft <= 0 || movesLeft <= 0) gameStatus = 'FAIL';
-            if (isRichi) {
-                richiAutoTimer += dt;
-                // 報聽自動尋找模式
-                if (richiAutoTimer > 0.8) {
-                    richiAutoTimer = 0;
-                    fillPool(); // 摸新牌
-                    // 掃描牌池是否有胡
-                    for(let i=0; i<pool.length; i++) {
-                        let testHand = [...hand];
-                        testHand[13] = pool[i]; // 測試最後換入的位置
-                        if(calculateTotalFan(testHand)) {
-                            performSwap(13, i);
-                            break;
-                        }
-                    }
-                }
-            }
+            if (timeLeft <= 0) gameStatus = 'FAIL';
         }
         pool.forEach(p => { p.x += (p.targetX - p.x) * 0.15; p.y += (p.targetY - p.y) * 0.15; });
         hand.forEach((t, i) => { 
