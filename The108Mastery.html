@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>拾肆雀：生存競技 15格版</title>
+    <title>拾肆雀：生存競技 (街機版)</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -21,18 +21,19 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const GW = 720, GH = 1280;
 
+// --- 遊戲狀態變數 ---
 let gameStatus = 'START_SCREEN'; 
 let totalScore = 0, movesLeft = 15, timeLeft = 60;
-let hand = [], pool = [], deck = [], flowersWon = [];
+let hand = [], pool = [], deck = [], flowersWon = [], gangsWon = []; 
 let swapActionCount = 0, gameCount = 0; 
 let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
 
-let winInfo = { names: [], totalTai: 0, scale: 0, rewardMoves: 0, thisWinTotal: 0 };
+let winInfo = { names: [], totalTai: 0, scale: 0, thisWinTotal: 0 };
 let drawGamePending = false, winPending = false; 
 let isRichi = false, richiAutoTimer = 0, glowValue = 0;
+let isPlayerTenpai = false; 
 
 const WIND_ORDER = ['🀀', '🀁', '🀂', '🀃'];
-const FLOWER_NAMES = ['春', '夏', '秋', '冬', '梅', '蘭', '竹', '菊'];
 let roundWind = '🀀', seatWind = '🀀';
 
 const TILES_DATA = {
@@ -72,24 +73,36 @@ function resize() {
     ctx.scale(scale, scale);
 }
 
+// --- 核心修改：固定數值邏輯 ---
 function resetAndStart(isFullReset) {
-    if(isFullReset) { totalScore = 0; movesLeft = 15; gameCount = 0; }
-    else { gameCount++; }
+    if(isFullReset) { 
+        totalScore = 0; 
+        gameCount = 0; 
+        winInfo = { totalTai: 0 }; 
+    } else { 
+        gameCount++; 
+    }
+
+    // --- 修改點：固定步數與時間 ---
+    movesLeft = 15;   // 固定 15 步
+    timeLeft = 60;    // 固定 60 秒
+
     seatWind = WIND_ORDER[gameCount % 4];
     roundWind = WIND_ORDER[Math.floor((gameCount / 4) % 4)];
-    timeLeft = 60; swapActionCount = 0; flowersWon = [];
+    
+    swapActionCount = 0; flowersWon = []; gangsWon = [];
     selectedHandIndex = -1; selectedPoolIndex = -1;
     drawGamePending = false; winPending = false;
-    isRichi = false; richiAutoTimer = 0;
+    isRichi = false; richiAutoTimer = 0; isPlayerTenpai = false;
+    
     startOpeningSequence();
 }
 
 async function startOpeningSequence() {
     gameStatus = 'DEALING';
     deck = createDeck();
-    hand = []; pool = []; flowersWon = [];
+    hand = []; pool = []; flowersWon = []; gangsWon = [];
     
-    // 1. 抓牌順序: 4, 3, 3, 3 (共13張)
     const grabbingSteps = [4, 3, 3, 3]; 
     for(let stepCount of grabbingSteps) {
         for(let i = 0; i < stepCount; i++) {
@@ -102,23 +115,18 @@ async function startOpeningSequence() {
         await delay(100); 
     }
 
-    // 2. 再補一張 (使手牌初始為 14 張)
     let lastTile = deck.pop();
     lastTile.x = 800; lastTile.y = 1080;
     hand.push(lastTile);
     playTone(900, 0.1, 0.05);
     await delay(400);
 
-    // 3. 補花 (全部抓完才補)
     await handleFlowers();
-    
-    // 4. 排序並填充牌池
     sortHand(); 
     await delay(500); 
     fillFullPool();
     
-    // 檢查天胡
-    let initialCheck = calculateTotalTai(hand, flowersWon);
+    let initialCheck = calculateTotalTai(hand, flowersWon, gangsWon);
     if(initialCheck) {
         winPending = true; playTone(987, 0.5); await delay(1000);
         triggerWin(initialCheck);
@@ -139,12 +147,9 @@ async function handleFlowers() {
                 flowersWon.push(flow);
                 
                 let replacement = deck.pop(); 
-                replacement.x = hand[i].x; 
-                replacement.y = hand[i].y - 150;
+                replacement.x = hand[i].x; replacement.y = hand[i].y - 150;
                 hand[i] = replacement;
-                hasFlower = true; 
-                await delay(300); 
-                break;
+                hasFlower = true; await delay(300); break;
             }
         }
     }
@@ -153,12 +158,10 @@ async function handleFlowers() {
 function fillFullPool() {
     pool = [];
     deck = deck.filter(t => t.type !== 'FLOWER');
-    // 修改：填充至 15 張 (5x3)
     while(pool.length < 15 && deck.length > 0) {
         let t = deck.pop();
         t.x = GW/2; t.y = GH/2;
         let i = pool.length;
-        // 修改座標計算：5行
         t.targetX = 110 + (i % 5) * 125; 
         t.targetY = 480 + Math.floor(i / 5) * 145;
         pool.push(t);
@@ -171,11 +174,11 @@ async function performSwap(hIdx, pIdx) {
     if (gameStatus !== 'PLAYING' || winPending) return;
     
     const poolTile = { ...pool[pIdx] };
-    const handTile = { ...hand[hIdx] };
+    const oldHandTile = { ...hand[hIdx] }; 
+    
     let tempHand = [...hand];
     tempHand[hIdx] = poolTile; 
-    
-    let results = calculateTotalTai(tempHand, flowersWon);
+    let results = calculateTotalTai(tempHand, flowersWon, gangsWon);
     
     if (results) {
         hand[hIdx] = poolTile; 
@@ -185,27 +188,79 @@ async function performSwap(hIdx, pIdx) {
         winPending = true; playTone(987, 0.3); await delay(1200); 
         triggerWin(results);
     } else {
-        movesLeft--; swapActionCount++; playTone(440, 0.05);
-        hand[hIdx] = poolTile;
-        pool[pIdx] = handTile; // 架構不變：手牌填補牌池空缺
+        if (!isPlayerTenpai) {
+            movesLeft--; 
+        }
+        swapActionCount++; playTone(440, 0.05);
         
-        // 更新座標 logic
-        pool[pIdx].targetX = 110 + (pIdx % 5) * 125;
-        pool[pIdx].targetY = 480 + Math.floor(pIdx / 5) * 145;
+        hand[hIdx] = poolTile;
+
+        if (deck.length > 0) {
+            let newTile = deck.pop();
+            newTile.x = pool[pIdx].x; newTile.y = -120; 
+            newTile.targetX = 110 + (pIdx % 5) * 125;
+            newTile.targetY = 480 + Math.floor(pIdx / 5) * 145;
+            pool[pIdx] = newTile;
+        } else {
+            pool[pIdx] = oldHandTile;
+            pool[pIdx].targetX = 110 + (pIdx % 5) * 125;
+            pool[pIdx].targetY = 480 + Math.floor(pIdx / 5) * 145;
+        }
         
         selectedHandIndex = -1; selectedPoolIndex = -1;
         sortHand(); await delay(300); 
+        
         if (movesLeft <= 0) gameStatus = 'FAIL';
-        // 因為沒有更換按鈕，這裡只要Deck還有牌，理論上不會死局，但如果是純交換，Deck不會被用到
         else if (deck.length === 0) checkFinalPossibility();
     }
 }
 
-function calculateTotalTai(h, flowers) {
-    if (h.length !== 14) return null;
+async function performGang(tileKey, isAnGang) {
+    if (gameStatus !== 'PLAYING' || winPending || deck.length === 0) return;
+    
+    let toRemove = [];
+    for(let i=hand.length-1; i>=0; i--) {
+        if((hand[i].type + hand[i].txt) === tileKey) {
+            toRemove.push(hand[i]);
+            hand.splice(i, 1);
+        }
+    }
+    
+    if(toRemove.length !== 4) return;
+
+    playTone(1300, 0.3);
+    
+    let gangObj = { 
+        tile: toRemove[0], 
+        isAnGang: isAnGang,
+        targetX: GW - 60,
+        targetY: 280 + gangsWon.length * 100 
+    };
+    gangsWon.push(gangObj);
+
+    let newTile = deck.pop();
+    newTile.x = 800; newTile.y = 1080;
+    hand.push(newTile);
+    
+    sortHand();
+    await delay(300);
+    
+    let results = calculateTotalTai(hand, flowersWon, gangsWon);
+    if(results) {
+        results.push({ name: "槓上開花", tai: 1 });
+        winPending = true; playTone(987, 0.3); await delay(1200);
+        triggerWin(results);
+    }
+}
+
+function calculateTotalTai(h, flowers, gangs) {
+    let expectedLen = 14 - (gangs.length * 3);
+    if (h.length !== expectedLen) return null;
+
     const checkH = [...h];
     let taiList = [{ name: "底台", tai: 2 }];
     const counts = {}; checkH.forEach(t => { const k = t.type + (t.val || t.txt); counts[k] = (counts[k] || 0) + 1; });
+    
     if (isRichi) taiList.push({ name: "立直", tai: 2 });
 
     const seatIdx = WIND_ORDER.indexOf(seatWind);
@@ -214,8 +269,15 @@ function calculateTotalTai(h, flowers) {
         if (idx === seatIdx || idx === seatIdx + 4) taiList.push({ name: `正花`, tai: 1 });
     });
 
-    let pairs = 0; for (let k in counts) if(counts[k]>=2) pairs += Math.floor(counts[k]/2);
-    if (pairs === 7) return [{ name: "七對子", tai: 4 }, ...taiList];
+    gangs.forEach(g => {
+        if(g.isAnGang) taiList.push({ name: "暗槓", tai: 2 });
+        else taiList.push({ name: "明槓", tai: 1 });
+    });
+
+    if (gangs.length === 0) {
+        let pairs = 0; for (let k in counts) if(counts[k]>=2) pairs += Math.floor(counts[k]/2);
+        if (pairs === 7) return [{ name: "七對子", tai: 4 }, ...taiList];
+    }
 
     let best = null;
     for (let key in counts) { 
@@ -226,13 +288,20 @@ function calculateTotalTai(h, flowers) {
     }
     if (!best) return null;
 
-    const hasKe = best.mianzi.some(x => x.type === 'ke');
-    const hasWord = checkH.some(t => ['WIND','DRAGON'].includes(t.type));
-    const suitC = new Set(checkH.filter(t => ['MAN','TONG','TIAO'].includes(t.type)).map(t => t.type)).size;
-    if (hasKe && best.mianzi.filter(x => x.type === 'ke').length === 4) taiList.push({ name: "對對胡", tai: 4 });
+    const hasKe = best.mianzi.some(x => x.type === 'ke') || gangs.length > 0;
+    const hasWord = checkH.some(t => ['WIND','DRAGON'].includes(t.type)) || gangs.some(g => ['WIND','DRAGON'].includes(g.tile.type));
+    
+    let allTiles = [...checkH];
+    gangs.forEach(g => allTiles.push(g.tile));
+    const suitC = new Set(allTiles.filter(t => ['MAN','TONG','TIAO'].includes(t.type)).map(t => t.type)).size;
+    
+    let isDuiDui = (best.mianzi.filter(x => x.type === 'ke').length + gangs.length) === 4;
+
+    if (isDuiDui) taiList.push({ name: "對對胡", tai: 4 });
     if (suitC === 1 && !hasWord) taiList.push({ name: "清一色", tai: 8 });
     else if (suitC === 1 && hasWord) taiList.push({ name: "混一色", tai: 4 });
     if (!hasKe && !hasWord) taiList.push({ name: "平胡", tai: 1 });
+    
     return taiList;
 }
 
@@ -257,6 +326,26 @@ function findMianzi(counts, structures) {
     return false;
 }
 
+function checkFinalPossibility() {
+    if (deck.length > 0) return;
+    let canWin = false;
+    for(let pTile of pool) {
+        for(let i=0; i<hand.length; i++) {
+            let temp = JSON.parse(JSON.stringify(hand));
+            temp[i] = pTile;
+            if(calculateTotalTai(temp, flowersWon, gangsWon)) { canWin = true; break; }
+        }
+        if(canWin) break;
+    }
+    if (!canWin) { drawGamePending = true; setTimeout(triggerDrawGame, 1000); }
+}
+
+function triggerDrawGame() {
+    // 流局沒有獎勵，步數也不扣（因為下局固定 15）
+    winInfo = { names: ["流局"], totalTai: 0, scale: 0, thisWinTotal: 0 };
+    gameStatus = 'WIN_ANIM'; playTone(150, 0.8);
+}
+
 function drawTile(x, y, txt, color, w, h, isS, fs, isG = false) {
     ctx.save(); ctx.translate(x, y);
     if (isG) { 
@@ -272,25 +361,58 @@ function drawTile(x, y, txt, color, w, h, isS, fs, isG = false) {
 function draw() {
     ctx.clearRect(0, 0, GW, GH);
     ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(0, 0, GW, 220);
-    ctx.font = "bold 40px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#fff";
-    ctx.fillText(`${roundWind}風圈 / 門風${seatWind}`, 360, 60);
-    ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
+    
+    // --- UI 更新：顯示局數與圈風 ---
+    ctx.font = "bold 36px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#fff";
+    ctx.fillText(`第 ${gameCount + 1} 局 | ${roundWind}圈 ${seatWind}門`, 360, 60);
+    
+    // 顯示步數 (固定 15)
+    if (isPlayerTenpai) {
+        ctx.fillStyle = "#0f0"; ctx.fillText(`步數: FREE`, 180, 130);
+    } else {
+        ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`步數: ${movesLeft}`, 180, 130);
+    }
+
     ctx.fillStyle = isRichi ? "#f44" : "#fc0"; ctx.fillText(`時間: ${Math.ceil(timeLeft)}s`, 540, 130);
     ctx.fillText(`總分: ${totalScore.toLocaleString()}`, 360, 190);
     
     flowersWon.forEach(f => drawTile(f.x, f.y, f.txt, '#f57c00', 50, 70, false, 28));
-    // 繪製牌池 (15格)
+    
+    gangsWon.forEach((g, i) => {
+        let gx = g.targetX, gy = 280 + i * 85;
+        for(let k=0; k<4; k++) {
+            let col = getCol(g.tile.type);
+            let txt = g.tile.txt;
+            drawTile(gx, gy - k*12, txt, col, 50, 70, false, 28);
+        }
+        ctx.fillStyle="#fc0"; ctx.font="20px Arial"; 
+        ctx.fillText(g.isAnGang?"暗槓":"明槓", gx, gy + 50);
+    });
+
     pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 110, 150, i === selectedPoolIndex, 65));
 
+    let gangOptions = getGangOptions();
+    
     if (gameStatus === 'PLAYING') {
-        let canRadar = false; for(let i=0; i<hand.length; i++) if(checkSpecificRichi(i)) { canRadar=true; break; }
-        // 移除 "更換牌池" 按鈕的繪製
-        
-        // 聽牌按鈕位置與寬度調整 (置中)
+        let canRadar = false; 
+        for(let i=0; i<hand.length; i++) if(checkSpecificRichi(i)) { canRadar=true; break; }
+        isPlayerTenpai = canRadar; 
+
         ctx.fillStyle = isRichi ? "#555" : (canRadar ? "#d32f2f" : "#333");
         ctx.beginPath(); ctx.roundRect(180, 880, 360, 80, 15); ctx.fill();
         ctx.fillStyle = "#fff"; ctx.font = "bold 30px Arial"; 
         ctx.fillText(isRichi ? "聽牌中..." : "聽牌立直 (+2台)", 360, 930);
+
+        if(gangOptions.length > 0 && deck.length > 0 && !winPending) {
+            gangOptions.forEach((key, idx) => {
+                let btnX = 620, btnY = 900 - idx * 100;
+                ctx.fillStyle = "#673ab7"; ctx.beginPath(); ctx.roundRect(btnX-50, btnY, 100, 60, 10); ctx.fill();
+                ctx.fillStyle = "#fff"; ctx.font = "bold 24px Arial"; ctx.fillText("暗槓", btnX, btnY+38);
+                ctx.fillStyle = "#ff9800"; ctx.beginPath(); ctx.roundRect(btnX-50, btnY-70, 100, 60, 10); ctx.fill();
+                ctx.fillStyle = "#fff"; ctx.fillText("明槓", btnX, btnY-32);
+                ctx.font = "20px Arial"; ctx.fillStyle = "#fff"; ctx.fillText(key.replace(/[A-Z]+/, ''), btnX, btnY-90);
+            });
+        }
     }
     
     ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 950, GW, 330);
@@ -304,15 +426,24 @@ function draw() {
     }
     
     if (gameStatus === 'WIN_ANIM') drawWinOverlay();
-    if (gameStatus === 'START_SCREEN') drawOverlay("拾肆雀：15格生存", "開始挑戰", "#fc0");
-    if (gameStatus === 'FAIL') drawOverlay("生命耗盡", "重新開始", "#f44");
+    if (gameStatus === 'START_SCREEN') drawOverlay("拾肆雀：街機版", "開始挑戰", "#fc0");
+    if (gameStatus === 'FAIL') drawOverlay("挑戰失敗", "重新開始", "#f44");
 }
 
+function getGangOptions() {
+    const counts = {};
+    hand.forEach(t => { const k = t.type + t.txt; counts[k] = (counts[k] || 0) + 1; });
+    return Object.keys(counts).filter(k => counts[k] === 4);
+}
+
+// --- 核心修改：結算畫面 ---
 function drawWinOverlay() {
     ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
     ctx.save(); ctx.translate(360, 640); ctx.scale(winInfo.scale, winInfo.scale);
+    
     ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.textAlign="center";
     ctx.fillText(winInfo.totalTai > 0 ? `${winInfo.totalTai} 台!` : winInfo.names[0], 0, -280);
+    
     if(winInfo.totalTai > 0) {
         ctx.font = "26px Arial"; ctx.fillStyle = "rgba(255,255,255,0.7)";
         winInfo.names.forEach((n, i) => {
@@ -320,19 +451,32 @@ function drawWinOverlay() {
             ctx.textAlign = col === -1 ? "right" : (col === 1 ? "left" : "center");
             ctx.fillText(n, col * 220, -180 + row * 40);
         });
+        
         ctx.fillStyle = "#fff"; ctx.font = "32px Arial"; ctx.textAlign="center";
-        ctx.fillText(`本局得分：+${winInfo.thisWinTotal.toLocaleString()}`, 0, 150);
-        ctx.fillText(`❤️ 步數：+${winInfo.rewardMoves}`, 0, 220);
+        ctx.fillText(`本局得分：+${winInfo.thisWinTotal.toLocaleString()}`, 0, 100);
+        
+        // 簡單顯示下一局提示
+        ctx.fillStyle = "#0fc"; ctx.font = "bold 36px Arial";
+        ctx.fillText(`下一局準備:`, 0, 200);
+        ctx.font = "bold 50px Arial";
+        ctx.fillText(`15 步 / 60 秒`, 0, 260);
+
+    } else {
+         ctx.fillStyle = "#f44"; ctx.font = "bold 32px Arial";
+         ctx.fillText("無得分，下局繼續", 0, 150);
     }
+    
     ctx.fillStyle = "#aaa"; ctx.font = "24px Arial"; ctx.fillText("點擊繼續", 0, 400); ctx.restore();
     if(winInfo.scale < 1) winInfo.scale += 0.05;
 }
 
 function triggerWin(results) {
     const sumTai = results.reduce((a, b) => a + b.tai, 0);
-    const earned = (sumTai + Math.floor(timeLeft) + movesLeft) * 100;
-    totalScore += earned; movesLeft += sumTai;
-    winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, scale: 0, rewardMoves: sumTai, thisWinTotal: earned };
+    // 台數越高，分數加成越多
+    const earned = (sumTai * 200) + (Math.floor(timeLeft) * 10) + (movesLeft * 50);
+    totalScore += earned; 
+    
+    winInfo = { names: results.map(r => `${r.name} ${r.tai}台`), totalTai: sumTai, scale: 0, thisWinTotal: earned };
     gameStatus = 'WIN_ANIM'; playTone(880, 0.2);
 }
 
@@ -340,9 +484,10 @@ function checkSpecificRichi(hIdx) {
     const allU = [];
     ['MAN','TONG','TIAO'].forEach(type => { for(let i=1;i<=9;i++) allU.push({type, val:i, txt:TILES_DATA[type][i-1]}); });
     ['WIND','DRAGON'].forEach(type => { TILES_DATA[type].forEach(txt => allU.push({type, txt, val:null})); });
+    
     for (let testTile of allU) {
         let tempHand = JSON.parse(JSON.stringify(hand)); tempHand[hIdx] = testTile;
-        if (calculateTotalTai(tempHand, flowersWon)) return true;
+        if (calculateTotalTai(tempHand, flowersWon, gangsWon)) return true;
     }
     return false;
 }
@@ -356,9 +501,16 @@ function handleInput(e) {
     if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
     if (gameStatus !== 'PLAYING' || winPending) return;
 
+    let gangOptions = getGangOptions();
+    if(gangOptions.length > 0 && mx > 570 && mx < 670) {
+        for(let idx=0; idx < gangOptions.length; idx++) {
+            let btnY = 900 - idx * 100;
+            if(my > btnY && my < btnY+60) { performGang(gangOptions[idx], true); return; }
+            if(my > btnY-70 && my < btnY-10) { performGang(gangOptions[idx], false); return; }
+        }
+    }
+
     if (my > 880 && my < 960) {
-        // 移除左側 "更換牌池" 的點擊偵測
-        // 只保留右側 "聽牌立直" 區域 (改為置中：180~540)
         if (mx > 180 && mx < 540 && !isRichi) {
             if (selectedHandIndex !== -1 && checkSpecificRichi(selectedHandIndex)) { isRichi = true; selectedHandIndex = -1; playTone(1200, 0.5); }
             return;
@@ -387,15 +539,22 @@ function update() {
         timeLeft -= isRichi ? dt * 2 : dt; if (timeLeft <= 0) gameStatus = 'FAIL';
         if (isRichi) {
             richiAutoTimer += dt;
-            if (richiAutoTimer > 0.8) { 
+            if (richiAutoTimer > 0.6) { 
                 richiAutoTimer = 0;
                 if (deck.length > 0) {
-                    fillFullPool();
-                    for(let pIdx=0; pIdx<pool.length; pIdx++)
+                    let madeMove = false;
+                    for(let pIdx=0; pIdx<pool.length; pIdx++) {
                         for(let hIdx=0; hIdx<hand.length; hIdx++){
                             let th = JSON.parse(JSON.stringify(hand)); th[hIdx] = pool[pIdx];
-                            if(calculateTotalTai(th, flowersWon)) return performSwap(hIdx, pIdx);
+                            if(calculateTotalTai(th, flowersWon, gangsWon)) { performSwap(hIdx, pIdx); madeMove = true; break; }
                         }
+                        if(madeMove) break;
+                    }
+                    if (!madeMove && !winPending) {
+                        let rHand = Math.floor(Math.random() * hand.length);
+                        let rPool = Math.floor(Math.random() * pool.length);
+                        performSwap(rHand, rPool);
+                    }
                 } else checkFinalPossibility();
             }
         }
