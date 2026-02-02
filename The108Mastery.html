@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>拾肆雀：Arcade Plus (Fixed)</title>
+    <title>拾肆雀：Arcade Plus (Discard Mode)</title>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { margin: 0; background: #051a10; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; position: fixed; width: 100%; font-family: sans-serif; }
@@ -27,7 +27,7 @@ let hand = [], pool = [], deck = [], flowersWon = [], gangsWon = [];
 let swapActionCount = 0, gameCount = 0; 
 let selectedHandIndex = -1, selectedPoolIndex = -1, lastTimestamp = 0;
 let isTenpai = false; 
-let richiPad = []; // 【優化】快取每一張牌的聽牌提示狀態
+let richiPad = []; 
 
 let winInfo = { names: [], totalTai: 0, scale: 0, thisWinTotal: 0 };
 let winPending = false; 
@@ -84,7 +84,6 @@ async function startOpeningSequence() {
     gameStatus = 'DEALING';
     let validDeal = false;
     
-    // --- 避免起手即大牌 (Anti-Instant-Win) ---
     while(!validDeal) {
         deck = createDeck();
         let testHand = deck.slice(-14);
@@ -105,11 +104,10 @@ async function startOpeningSequence() {
     await handleFlowers();
     sortHand(); 
     fillFullPool();
-    checkTenpaiStatus(); // 開局檢查一次聽牌狀態
+    checkTenpaiStatus();
     gameStatus = 'PLAYING';
 }
 
-// 【修復】補花邏輯修正，防止座標 undefined 造成亂跑
 async function handleFlowers() {
     let hasFlower = true;
     while(hasFlower) {
@@ -119,8 +117,10 @@ async function handleFlowers() {
                 playTone(1100, 0.1, 0.1);
                 flowersWon.push(hand[i]);
                 
+                // 補牌時檢查牌堆是否還有牌，沒有則重新洗牌 (理論上這遊戲步數少不太會發生)
+                if(deck.length === 0) deck = createDeck();
+                
                 let newTile = deck.pop();
-                // 關鍵修復：讓新牌繼承原本花牌的位置，避免瞬間移動到(0,0)
                 newTile.x = hand[i].x; 
                 newTile.y = hand[i].y;
                 hand[i] = newTile;
@@ -142,46 +142,66 @@ function fillFullPool() {
     }
 }
 
+// --- 核心邏輯修改區 ---
 async function performSwap(hIdx, pIdx) {
     if (gameStatus !== 'PLAYING' || winPending) return;
     
+    // 1. 取得玩家想要的牌池牌
     const poolTile = { ...pool[pIdx] };
-    const oldHandTile = { ...hand[hIdx] }; 
+    
+    // 2. 暫時模擬手牌狀態來檢查是否胡牌
     let tempHand = [...hand]; tempHand[hIdx] = poolTile; 
     let results = calculateTotalTai(tempHand, flowersWon, gangsWon);
     
     if (results) {
-        // 胡牌邏輯
+        // 胡牌：直接拿進來
         hand[hIdx] = poolTile; pool.splice(pIdx, 1);
         selectedHandIndex = -1; selectedPoolIndex = -1;
         sortHand(); await delay(200);
         winPending = true; playTone(987, 0.3); triggerWin(results);
     } else {
-        // 交換邏輯
+        // 沒有胡牌 -> 執行「丟棄 + 補新牌」邏輯
         if (!isTenpai) movesLeft--; 
         
+        // A. 玩家手上的牌被丟棄 (消失)
+        // B. 牌池的牌進入玩家手中
         hand[hIdx] = poolTile;
-        pool[pIdx] = oldHandTile;
-        pool[pIdx].targetX = 110 + (pIdx % 5) * 125;
-        pool[pIdx].targetY = 480 + Math.floor(pIdx / 5) * 145;
+
+        // C. 從牌堆抽一張新牌填補牌池空缺
+        if(deck.length === 0) {
+            // 極端情況：牌堆沒牌了，簡單做個重置或結束，這裡選擇重置一部分
+            deck = createDeck(); 
+        }
+        
+        let newDeckTile = deck.pop();
+        
+        // 設定新牌的動畫起始點 (從畫面底部飛上來，表示從牌山抽的)
+        newDeckTile.x = GW / 2;
+        newDeckTile.y = GH + 100; 
+        
+        // 設定新牌的目標位置 (原本牌池的那個位置)
+        newDeckTile.targetX = 110 + (pIdx % 5) * 125;
+        newDeckTile.targetY = 480 + Math.floor(pIdx / 5) * 145;
+
+        // 放入牌池
+        pool[pIdx] = newDeckTile;
+        
+        // 播放音效：丟牌聲 + 抽牌聲
+        playTone(300, 0.05); // 丟棄低音
+        setTimeout(() => playTone(600, 0.05), 100); // 補牌高音
         
         selectedHandIndex = -1; selectedPoolIndex = -1;
         sortHand();
-        checkTenpaiStatus(); // 【優化】交換後才重新計算聽牌，而非在 draw() 裡算
+        checkTenpaiStatus(); 
         if (movesLeft <= 0 && !isTenpai) gameStatus = 'FAIL';
     }
 }
 
-// 【優化】聽牌計算只在需要時執行，並存入快取
 function checkTenpaiStatus() {
     let canRadar = false; 
-    richiPad = new Array(hand.length).fill(false); // 重置提示陣列
-
+    richiPad = new Array(hand.length).fill(false);
     for(let i=0; i<hand.length; i++) {
-        if(checkSpecificRichi(i)) { 
-            canRadar = true; 
-            richiPad[i] = true; // 標記這張牌可以聽
-        }
+        if(checkSpecificRichi(i)) { canRadar = true; richiPad[i] = true; }
     }
     isTenpai = canRadar;
 }
@@ -257,7 +277,6 @@ function draw() {
     ctx.font = "bold 36px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#fff";
     ctx.fillText(`第 ${gameCount + 1} 局 | ${roundWind}圈 ${seatWind}門`, 360, 60);
     
-    // --- 聽牌 UI 提示 ---
     if (isTenpai) {
         ctx.fillStyle = "#0f0"; ctx.fillText(`聽牌中: FREE MOVES`, 180, 130);
     } else {
@@ -268,12 +287,15 @@ function draw() {
     ctx.fillText(`總分: ${totalScore.toLocaleString()}`, 360, 190);
     
     flowersWon.forEach((f, i) => drawTile(60 + i*55, 280, f.txt, '#f57c00', 50, 70, false, 28));
-    pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 110, 150, i === selectedPoolIndex, 65));
+    
+    // 繪製牌池
+    pool.forEach((p, i) => {
+        drawTile(p.x, p.y, p.txt, getCol(p.type), 110, 150, i === selectedPoolIndex, 65);
+    });
     
     ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(0, 950, GW, 330);
     hand.forEach((t, i) => {
         let isFocus = i === selectedHandIndex;
-        // 【優化】這裡直接讀取 richiPad 陣列，不進行運算
         let showGlow = isTenpai && richiPad[i];
         drawTile(t.x, t.y - (isFocus?45:0), t.txt, getCol(t.type), 92, 132, isFocus, null, showGlow);
     });
@@ -323,11 +345,8 @@ function update() {
         timeLeft -= dt; if (timeLeft <= 0) gameStatus = 'FAIL';
     }
     pool.forEach(p => { p.x += (p.targetX - p.x) * 0.15; p.y += (p.targetY - p.y) * 0.15; });
-    
-    // 手牌位置動畫更新
     hand.forEach((t, i) => { 
         let tx = 85 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145;
-        // 防止 NaN 傳遞
         if(!isNaN(t.x)) t.x += (tx - t.x) * 0.18; else t.x = tx;
         if(!isNaN(t.y)) t.y += (ty - t.y) * 0.18; else t.y = ty;
     });
