@@ -38,6 +38,7 @@
     let poolRefreshCount = 0; 
     let winInfo = { names: [], totalFan: 0, scale: 0, isDraw: false, details: [] };
 
+    // 階梯回補逻辑
     function getStepReward(count) {
         if (count === 0) return 10;
         if (count <= 2) return 8;
@@ -244,13 +245,14 @@
             ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`生命: ${movesLeft}`, 180, 210);
             ctx.fillStyle = (timeLeft <= 10) ? "#f44" : "#fc0"; ctx.fillText(`限時: ${Math.ceil(timeLeft)}s`, 540, 210);
 
+            // 【修改】上方提示文字
             const currentReward = getStepReward(poolRefreshCount);
             let rewardColor = "#0f0";
             if (poolRefreshCount === 0) rewardColor = "#FFD700";
             else if (poolRefreshCount >= 9) rewardColor = "#f44";
             else if (poolRefreshCount >= 5) rewardColor = "#fc0";
             ctx.fillStyle = rewardColor; ctx.font = "bold 24px Arial";
-            ctx.fillText(`胡牌預計回補: +${currentReward}`, 360, 255);
+            ctx.fillText(`目前胡牌回補: +${currentReward} 步`, 360, 255);
 
             pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
             if (gameStatus === 'PLAYING' || gameStatus === 'WAITING_DRAW' || gameStatus === 'DEALING') {
@@ -258,9 +260,23 @@
                 ctx.fillStyle = "#fff"; ctx.font = "bold 24px Arial"; ctx.textAlign = "center"; ctx.fillText(`牌庫剩餘: ${deck.length}`, 230, 398);
             }
             if (gameStatus === 'PLAYING') {
+                // 更換牌池按鈕底座
                 ctx.fillStyle = (deck.length > 0) ? "#e64a19" : "#333";
-                ctx.beginPath(); ctx.roundRect(GW/2 - 150, 880, 300, 80, 15); ctx.fill();
-                ctx.fillStyle = "#fff"; ctx.font = "bold 32px Arial"; ctx.textAlign = "center"; ctx.fillText("更換牌池", GW/2, 932);
+                ctx.beginPath(); ctx.roundRect(GW/2 - 150, 880, 300, 100, 15); ctx.fill(); // 稍微加高按鈕
+                
+                // 【核心修改】按鈕兩排文字顯示
+                const nextReward = getStepReward(poolRefreshCount + 1);
+                ctx.textAlign = "center";
+                
+                // 第一排：主標題
+                ctx.fillStyle = "#fff"; 
+                ctx.font = "bold 32px Arial"; 
+                ctx.fillText("更換牌池", GW/2, 925);
+                
+                // 第二排：代價提示
+                ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+                ctx.font = "bold 22px Arial";
+                ctx.fillText(`下次胡牌：補 ${nextReward} 步`, GW/2, 960);
             }
             ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0, 970, GW, 310);
             hand.forEach((t, i) => drawTile(t.x, t.y - (i === selectedHandIndex ? 40 : 0), t.txt, getCol(t.type), 88, 125, i === selectedHandIndex));
@@ -373,13 +389,12 @@
         if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
         if (gameStatus !== 'PLAYING') return; 
 
-        // 【修改】點擊更換牌池 (現在不扣 movesLeft)
-        if (my > 880 && my < 960 && mx > GW/2 - 150 && mx < GW/2 + 150) { 
+        // 【修改】點擊更換牌池 (不扣 movesLeft)
+        if (my > 880 && my < 980 && mx > GW/2 - 150 && mx < GW/2 + 150) { 
             if (deck.length > 0) {
-                poolRefreshCount++; // 僅增加次數（影響回補量）
+                poolRefreshCount++; 
                 fillPool(); 
                 playTone(450, 0.1, 0.2);
-                // 已移除 movesLeft-- 與相關失敗判定
             } 
             return; 
         }
