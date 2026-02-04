@@ -35,20 +35,28 @@
     let hand = [], pool = [], deck = [];
     let selectedHandIndex = -1, selectedPoolIndex = -1;
     let lastTimestamp = 0, swapCount = 0;
+    let poolRefreshCount = 0; // 【新增】追蹤更換牌池次數
     let winInfo = { names: [], totalFan: 0, scale: 0, isDraw: false, details: [] };
 
-    // 玩家與排行榜資料
+    // 階梯回補逻辑
+    function getStepReward(count) {
+        if (count === 0) return 10;
+        if (count <= 2) return 8;
+        if (count <= 4) return 5;
+        if (count <= 8) return 3;
+        if (count <= 11) return 1;
+        return 0;
+    }
+
     let playerName = localStorage.getItem('pixel_jd_player_name') || "";
     let leaderBoard = JSON.parse(localStorage.getItem('pixel_jd_mahjong_rank')) || [];
 
     function saveScore(score, rounds) {
-        // 如果還沒有名字，要求輸入
         if (!playerName) {
             let input = prompt("恭喜完成挑戰！請輸入你的大名：", "雞丁");
             playerName = input || "無名氏";
             localStorage.setItem('pixel_jd_player_name', playerName);
         }
-        
         leaderBoard.push({ name: playerName, score, rounds });
         leaderBoard.sort((a, b) => b.score - a.score);
         leaderBoard = leaderBoard.slice(0, 5);
@@ -101,6 +109,7 @@
         initialTime = (gameCount < 5) ? 60 : (gameCount < 15 ? 60 - (Math.floor(gameCount / 5) * 5) : Math.max(30, 50 - (Math.floor(gameCount / 10) * 5)));
         timeLeft = initialTime; lastTickTime = initialTime; 
         selectedHandIndex = -1; selectedPoolIndex = -1; swapCount = 0;
+        poolRefreshCount = 0; // 【新增】每局重置
         gameStatus = 'DEALING';
         
         let fullDeck = createDeck();
@@ -236,6 +245,15 @@
             ctx.fillStyle = movesLeft <= 3 ? "#f44" : "#0fc"; ctx.fillText(`生命: ${movesLeft}`, 180, 210);
             ctx.fillStyle = (timeLeft <= 10) ? "#f44" : "#fc0"; ctx.fillText(`限時: ${Math.ceil(timeLeft)}s`, 540, 210);
 
+            // 【新增】B方案：胡牌回補提示燈
+            const currentReward = getStepReward(poolRefreshCount);
+            let rewardColor = "#0f0";
+            if (poolRefreshCount === 0) rewardColor = "#FFD700";
+            else if (poolRefreshCount >= 9) rewardColor = "#f44";
+            else if (poolRefreshCount >= 5) rewardColor = "#fc0";
+            ctx.fillStyle = rewardColor; ctx.font = "bold 24px Arial";
+            ctx.fillText(`胡牌預計回補: +${currentReward}`, 360, 255);
+
             pool.forEach((p, i) => drawTile(p.x, p.y, p.txt, getCol(p.type), 115, 160, i === selectedPoolIndex));
             if (gameStatus === 'PLAYING' || gameStatus === 'WAITING_DRAW' || gameStatus === 'DEALING') {
                 ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.beginPath(); ctx.roundRect(140, 370, 180, 40, 10); ctx.fill();
@@ -258,17 +276,8 @@
         ctx.fillText("拾肆雀", 360, 320);
         ctx.font = "36px Arial"; ctx.fillStyle = "#aaa";
         ctx.fillText("Pixel JD 榮譽出品", 360, 400);
-
-        if(playerName) {
-            ctx.fillStyle = "#0fc"; ctx.font = "bold 32px Arial";
-            ctx.fillText(`挑戰者: ${playerName}`, 360, 480);
-        }
-
-        if(leaderBoard.length > 0) {
-            ctx.fillStyle = "#fc0"; ctx.font = "bold 42px Arial";
-            ctx.fillText(`最高分: ${leaderBoard[0].score.toLocaleString()}`, 360, 560);
-        }
-        
+        if(playerName) { ctx.fillStyle = "#0fc"; ctx.font = "bold 32px Arial"; ctx.fillText(`挑戰者: ${playerName}`, 360, 480); }
+        if(leaderBoard.length > 0) { ctx.fillStyle = "#fc0"; ctx.font = "bold 42px Arial"; ctx.fillText(`最高分: ${leaderBoard[0].score.toLocaleString()}`, 360, 560); }
         drawButton(360, 720, 350, 110, "#fc0", "遊戲開始");
         drawButton(360, 860, 350, 110, "#0fc", "遊戲說明");
         drawButton(360, 1000, 350, 110, "#f66", "排行榜");
@@ -278,28 +287,17 @@
         ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fillRect(0,0,GW,GH);
         ctx.fillStyle = "#f66"; ctx.font = "bold 70px Arial"; ctx.textAlign = "center";
         ctx.fillText("傳奇排行榜", 360, 150);
-        
         ctx.textAlign = "left"; ctx.font = "bold 28px Arial"; ctx.fillStyle = "#666";
         ctx.fillText("名次  玩家名稱", 80, 250);
         ctx.textAlign = "right"; ctx.fillText("分數 / 局數", 640, 250);
-
         leaderBoard.forEach((item, i) => {
-            let y = 330 + i * 110;
-            ctx.fillStyle = i === 0 ? "#fc0" : "#fff";
-            ctx.textAlign = "left"; ctx.font = "bold 40px Arial";
-            ctx.fillText(`${i+1}.`, 80, y);
-            ctx.font = "bold 36px Arial";
-            ctx.fillText(`${item.name}`, 160, y);
-            
-            ctx.textAlign = "right"; ctx.font = "bold 32px Arial";
-            ctx.fillText(`${item.score.toLocaleString()}`, 640, y);
-            ctx.font = "24px Arial"; ctx.fillStyle = "#aaa";
-            ctx.fillText(`生存 ${item.rounds+1} 局`, 640, y + 40);
+            let y = 330 + i * 110; ctx.fillStyle = i === 0 ? "#fc0" : "#fff";
+            ctx.textAlign = "left"; ctx.font = "bold 40px Arial"; ctx.fillText(`${i+1}.`, 80, y);
+            ctx.font = "bold 36px Arial"; ctx.fillText(`${item.name}`, 160, y);
+            ctx.textAlign = "right"; ctx.font = "bold 32px Arial"; ctx.fillText(`${item.score.toLocaleString()}`, 640, y);
+            ctx.font = "24px Arial"; ctx.fillStyle = "#aaa"; ctx.fillText(`生存 ${item.rounds+1} 局`, 640, y + 40);
         });
-
-        if(leaderBoard.length === 0) {
-            ctx.fillStyle = "#666"; ctx.textAlign = "center"; ctx.fillText("尚無對局紀錄", 360, 500);
-        }
+        if(leaderBoard.length === 0) { ctx.fillStyle = "#666"; ctx.textAlign = "center"; ctx.fillText("尚無對局紀錄", 360, 500); }
         drawButton(360, 1120, 300, 90, "#aaa", "回主選單");
     }
 
@@ -308,7 +306,7 @@
         ctx.fillStyle = "#fc0"; ctx.font = "bold 60px Arial"; ctx.textAlign = "center";
         ctx.fillText("遊戲說明", 360, 150);
         ctx.fillStyle = "#fff"; ctx.font = "28px Arial"; ctx.textAlign = "left";
-        const rs = ["● 起手 12 步生命，每更換一張扣 1 步。","● 胡牌回補與番數相同的步數。","● 隨局數增加，限時會從 60s 縮減至 30s。","● 符合風圈/門風的刻子，額外 +1 番。","● 連續胡牌 3 局額外回補 2 步。","● 積分 = 基礎 + 番數x500 + 秒數x20 + 步數x100。"];
+        const rs = ["● 起手 12 步生命。","● 更換牌池扣 1 步，胡牌依換牌次數階梯回補。","● 0次換牌回補 10 步、1-2次回補 8 步...依此類推。","● 符合風圈/門風的刻子，額外 +1 番。","● 連續胡牌 3 局額外回補 2 步。","● 積分 = 基礎 + 番數x500 + 秒數x20 + 步數x100。"];
         rs.forEach((r, i) => ctx.fillText(r, 60, 300 + i * 70));
         drawButton(360, 1100, 300, 90, "#aaa", "回主選單");
     }
@@ -328,7 +326,8 @@
             ctx.fillStyle = "#fff"; ctx.font = "bold 40px Arial"; ctx.textAlign="center"; ctx.fillText("本局結算", 0, -320);
             winInfo.names.forEach((n, i) => { ctx.textAlign = (i % 2 === 0) ? "right" : "left"; ctx.fillStyle = "#fff"; ctx.font = "26px Arial"; let offsetX = (i % 2 === 0) ? -40 : 40; let offsetY = -240 + Math.floor(i / 2) * 45; ctx.fillText(n, offsetX, offsetY); });
             ctx.fillStyle = "#fc0"; ctx.font = "bold 80px Arial"; ctx.textAlign="center"; ctx.fillText(`${winInfo.totalFan} 番!`, 0, -40);
-            ctx.fillStyle = "#0f0"; ctx.font = "bold 35px Arial"; ctx.fillText(`生命回補 +${winInfo.totalFan}`, 0, 40);
+            // 【修改】顯示階梯回補量
+            ctx.fillStyle = "#0f0"; ctx.font = "bold 35px Arial"; ctx.fillText(`生命回補 +${winInfo.recovery}`, 0, 40);
             if (winStreak > 0 && winStreak % 3 === 0) { ctx.fillStyle = "#0ff"; ctx.fillText(`連莊獎勵 +2`, 0, 90); }
             ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.beginPath(); ctx.roundRect(-280, 120, 560, 200, 15); ctx.fill();
             ctx.font = "22px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
@@ -377,7 +376,14 @@
         if (gameStatus === 'WIN_ANIM' && winInfo.scale >= 1) return resetAndStart(false);
         if (gameStatus !== 'PLAYING') return; 
 
-        if (my > 880 && my < 960 && mx > GW/2 - 150 && mx < GW/2 + 150) { if (deck.length > 0) fillPool(); return; }
+        // 【修改】點擊更換牌池
+        if (my > 880 && my < 960 && mx > GW/2 - 150 && mx < GW/2 + 150) { 
+            if (deck.length > 0) {
+                movesLeft--; poolRefreshCount++; fillPool(); playTone(450, 0.1, 0.2);
+                if (movesLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; }
+            } 
+            return; 
+        }
         hand.forEach((t, i) => { let tx = 88 + (i % 7) * 92, ty = 1080 + Math.floor(i / 7) * 145; if (Math.abs(mx - tx) < 45 && Math.abs(my - ty) < 65) { if (selectedPoolIndex !== -1) performSwap(i, selectedPoolIndex); else { selectedHandIndex = (selectedHandIndex===i) ? -1 : i; playTone(600, 0.05, 0.3); } } });
         pool.forEach((p, i) => { if (Math.abs(mx - p.x) < 60 && Math.abs(my - p.y) < 80) { if (selectedHandIndex !== -1) performSwap(selectedHandIndex, i); else { selectedPoolIndex = (selectedPoolIndex===i) ? -1 : i; playTone(500, 0.05, 0.3); } } });
     }
@@ -385,14 +391,32 @@
     async function performSwap(hIdx, pIdx) {
         const pTile = { ...pool[pIdx] }; let tempHand = [...hand]; tempHand[hIdx] = pTile; let res = calculateTotalFan(tempHand);
         hand[hIdx] = pTile; pool.splice(pIdx, 1); selectedHandIndex = -1; selectedPoolIndex = -1; sortHand(); swapCount++;
+        
         if (res) {
-            const sum = res.reduce((a, b) => a + b.fan, 0); winStreak++; let bonusSteps = (winStreak > 0 && winStreak % 3 === 0) ? 2 : 0;
+            const sum = res.reduce((a, b) => a + b.fan, 0); 
+            const recovery = getStepReward(poolRefreshCount); // 【核心修改】依照換牌次數計算回補量
+            winStreak++; let bonusSteps = (winStreak > 0 && winStreak % 3 === 0) ? 2 : 0;
+            
             const scoreBase = 1000, scoreFan = sum * 500, scoreTime = Math.floor(timeLeft) * 20, scoreMoves = movesLeft * 100;
             lastGainedScore = scoreBase + scoreFan + scoreTime + scoreMoves; totalScore += lastGainedScore;
-            winInfo = { names: res.map(r => `${r.name} ${r.fan}番`), totalFan: sum, scale: 0, isDraw: false, details: [`基礎胡牌: +${scoreBase}`, `番數加成 ${sum}番: +${scoreFan}`, `速度獎勵 ${Math.ceil(timeLeft)}秒: +${scoreTime}`, `生命獎勵 ${movesLeft}步: +${scoreMoves}`] };
-            movesLeft += (sum + bonusSteps); gameStatus = 'WIN_ANIM'; playTone(880, 0.5, 0.5);
+            
+            winInfo = { 
+                names: res.map(r => `${r.name} ${r.fan}番`), 
+                totalFan: sum, 
+                recovery: recovery, // 紀錄回補量顯示在 UI
+                scale: 0, 
+                isDraw: false, 
+                details: [`基礎胡牌: +${scoreBase}`, `番數加成 ${sum}番: +${scoreFan}`, `速度獎勵 ${Math.ceil(timeLeft)}秒: +${scoreTime}`, `生命獎勵 ${movesLeft}步: +${scoreMoves}`] 
+            };
+            
+            movesLeft += (recovery + bonusSteps); // 執行階梯回補
+            gameStatus = 'WIN_ANIM'; playTone(880, 0.5, 0.5);
         } else {
-            movesLeft--; playTone(400, 0.1, 0.3); if (movesLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; } else if (deck.length === 0) checkFinalPossibility(); else if (pool.length === 0) fillPool();
+            // 注意：單純手動換牌（Swap）不計入 poolRefreshCount，只扣生命
+            movesLeft--; playTone(400, 0.1, 0.3); 
+            if (movesLeft <= 0) { gameStatus = 'FAIL'; winStreak = 0; } 
+            else if (deck.length === 0) checkFinalPossibility(); 
+            else if (pool.length === 0) fillPool();
         }
     }
 
